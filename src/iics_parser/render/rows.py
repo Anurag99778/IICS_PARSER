@@ -118,17 +118,21 @@ def _object_pairs(step: Step) -> List[ObjectPair]:
     if mapping is None:
         return []
 
-    lookup_note = _lookup_filter_note(mapping)
+    # Mapping-wide detail (lookups, router/filter steps) belongs on the step's
+    # first row; a source's own filter belongs on that source's row.
+    mapping_note = _lookup_filter_note(mapping)
     reach = _reachable_targets(mapping)
     pairs: List[ObjectPair] = []
 
     for source in mapping.sources:
+        source_note = _source_filter_note(source)
+        lookup_cell = _join(mapping_note if not pairs else "", source_note)
         targets = reach.get(source.name) or []
         if not targets:
             pairs.append(ObjectPair(
                 source_connection=source.connection_display,
                 source_object=_object_label(source),
-                lookup_filter=lookup_note,
+                lookup_filter=lookup_cell,
                 notes=_transform_notes(source),
             ))
             continue
@@ -136,7 +140,7 @@ def _object_pairs(step: Step) -> List[ObjectPair]:
             pairs.append(ObjectPair(
                 source_connection=source.connection_display if j == 0 else "",
                 source_object=_object_label(source) if j == 0 else "",
-                lookup_filter=lookup_note if not pairs else "",
+                lookup_filter=lookup_cell if j == 0 else "",
                 target_connection=target.connection_display,
                 target_object=_object_label(target),
                 notes=_join(_transform_notes(source) if j == 0 else "",
@@ -192,8 +196,24 @@ def _object_label(tx: Transformation) -> str:
     return tx.object_name or tx.name
 
 
+def _source_filter_note(source: Transformation) -> str:
+    """A source's own read-time filter and ordering."""
+    parts = []
+    if source.filter_condition:
+        parts.append(f"Filter: {source.filter_condition}")
+    if source.advanced_filter:
+        parts.append(f"Filter: {source.advanced_filter}")
+    if source.sort_fields:
+        parts.append("Sorted by: " + ", ".join(source.sort_fields))
+    return "\n".join(parts)
+
+
 def _lookup_filter_note(mapping: Mapping) -> str:
-    """Lookups, filters and router conditions, as one descriptive cell."""
+    """Mapping-wide lookups, filter steps and router conditions.
+
+    Source-attached filters are excluded - they are reported on their own row
+    by :func:`_source_filter_note` so each leg reads independently.
+    """
     parts: List[str] = []
     for lkp in mapping.lookups:
         detail = [f"Lookup: {lkp.name}"]
@@ -212,12 +232,22 @@ def _lookup_filter_note(mapping: Mapping) -> str:
         parts.append("\n".join(detail))
 
     for tx in mapping.transformations:
+        if tx.kind == "Source":
+            continue                       # reported on that source's own row
         if tx.filter_condition:
             parts.append(f"Filter ({tx.name}): {tx.filter_condition}")
         if tx.advanced_filter:
-            parts.append(f"Advanced filter ({tx.name}): {tx.advanced_filter}")
+            parts.append(f"Filter ({tx.name}): {tx.advanced_filter}")
         for cond in tx.group_expressions:
             parts.append(f"{tx.kind} ({tx.name}): {cond}")
+
+    # Transformations that shape the data without conditions of their own still
+    # belong in the analysis - an Aggregator or Sorter changes the output.
+    shaping = [tx.name for tx in mapping.transformations
+               if tx.kind in ("Aggregator", "Sorter", "Joiner", "Union",
+                              "Normalizer", "Rank", "Deduplicate")]
+    if shaping:
+        parts.append("Transformations: " + ", ".join(shaping))
     return "\n".join(parts)
 
 

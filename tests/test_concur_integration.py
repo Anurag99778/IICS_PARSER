@@ -292,3 +292,20 @@ def test_overrides_win_over_parsed_values(tmp_path):
 def test_unknown_override_key_is_reported(tmp_path):
     result = process(SAMPLE, tmp_path, overrides={"defaults": {"nonsense_field": "x"}})
     assert any("nonsense_field" in w for w in result.integration.warnings)
+
+
+def test_source_filters_appear_on_their_own_row(integration):
+    """Each source's read filter belongs to that source's leg, not the step."""
+    rows = mapping_detail_rows(integration)
+    by_source = {r[9]: r[10] for r in rows if r[9]}
+    assert "LOGINID IS NOT NULL" in by_source["MOR_EMPLOYEE_OUTBOUND_TRX_305"]
+    assert "EMPLOYEE_ID IS NOT NULL" in by_source["MOR_EMPLOYEE_OUTBOUND_TRX_710"]
+    # A source with no filter of its own must not inherit a sibling's.
+    assert "LOGINID" not in by_source["MOR_EMPLOYEE_OUTBOUND_TRX_760"]
+
+
+def test_shaping_transformations_are_reported(integration):
+    """An Aggregator or Sorter changes the output and must be visible."""
+    rows = mapping_detail_rows(integration)
+    lnd_to_ff = [r for r in rows if r[4] == "m_LND_TO_FF_CONCUR_EMPLOYYE_OUTBOUND"]
+    assert any("Aggregator" in r[10] and "Sorter" in r[10] for r in lnd_to_ff)
