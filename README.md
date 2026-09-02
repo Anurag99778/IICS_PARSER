@@ -59,10 +59,11 @@ Almost everything. The export package is far more structured than it looks:
 | In-out parameters, parameter file | `mct_*.MTT/mtTask.json` |
 | Source/target connections and objects | mapping graph `dataAdapter` → `cn_*.Connection` |
 | Expressions, variables | Expression transformation fields |
+| **Column lineage** (`o_proj_unit → SEGMENT_1`) | target `manualMappings` |
 | Lookups, filters, router conditions | `lookupConditions`, `readOptions`, group conditions |
 | Pre/Post SQL, write operations | target `advancedProperties` / `writeOptions` |
 | Flow strings (`src->exp->tgt`) | walking the mapping `links` |
-| Mass-ingestion directories, actions | `fit_*.MI_TASK.dat` |
+| Mass-ingestion directories, actions, PGP keys, file retention | `fit_*.MI_TASK.dat` |
 | **Mapping diagrams in the Word doc** | the preview JPEG inside each `.DTEMPLATE` |
 | Notification recipients, subjects, bodies | `emailNotificationService` parameters |
 | Error handling | taskflow `<catch>` handlers |
@@ -134,7 +135,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 51 tests
+python -m pytest        # 54 tests
 ```
 
 ## Requirements

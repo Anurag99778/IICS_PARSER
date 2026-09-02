@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..extract.package import Asset
-from ..model.ir import Connection, ExpressionField, LookupCondition, Mapping, Transformation
+from ..model.ir import (Connection, ExpressionField, FieldMapping, LookupCondition,
+                        Mapping, Transformation)
 
 #: Informatica class-name fragment -> canonical transformation kind.
 _KIND_BY_CLASS = {
@@ -235,6 +236,9 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
     if kind == "Filter" and raw.get("filterCondition"):
         tx.group_expressions.append(str(raw["filterCondition"]))
 
+    # Column-level lineage: which incoming field feeds which target column.
+    tx.field_mappings = _field_mappings(raw)
+
     if not tx.update_columns:
         tx.update_columns = [
             c.get("name", c) if isinstance(c, dict) else str(c)
@@ -242,6 +246,36 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
         ]
 
     return tx
+
+
+def _field_mappings(raw: dict) -> List[FieldMapping]:
+    """Read a target's manual field mappings.
+
+    Each entry names its incoming field but references the target column by id,
+    so build an id -> name index over the transformation and resolve through it.
+    """
+    entries = ((raw.get("manualMappings") or {}).get("mappingList")) or []
+    if not entries:
+        return []
+
+    index: Dict[int, str] = {}
+    stack = [raw]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if "$$ID" in node and "name" in node:
+                index[node["$$ID"]] = node["name"]
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+
+    out = []
+    for entry in entries:
+        source = entry.get("fromFieldName") or ", ".join(entry.get("fromFieldNames") or [])
+        target = index.get((entry.get("toField") or {}).get("##ID"), "")
+        if source and target:
+            out.append(FieldMapping(from_field=source, to_field=target))
+    return out
 
 
 def _resolve_kind(class_name: str) -> tuple:

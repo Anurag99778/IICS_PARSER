@@ -101,7 +101,15 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
         schedule=data.get("schedule", "") or "",
     )
 
-    actions = [a.get("type", "") for a in (data.get("taskActions") or []) if a.get("type")]
+    raw_actions = data.get("taskActions") or []
+    actions = [a.get("type", "") for a in raw_actions if a.get("type")]
+    # Encryption steps name the key they use - security-relevant for a migration.
+    detail = []
+    for action in raw_actions:
+        props = action.get("properties") or {}
+        for key, label in (("pgpKeyId", "PGP key"), ("pgpFileSuffix", "Suffix")):
+            if props.get(key):
+                detail.append(f"{label}: {props[key]}")
     src_opts = data.get("sourceOptions") or {}
     tgt_opts = data.get("targetOptions") or {}
     src_conn = data.get("sourceConnection") or {}
@@ -113,6 +121,7 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
         directory=src_opts.get("src.download.path", "") or "",
         file_pattern=src_opts.get("src.file.pattern", "") or "",
         archive_directory=src_opts.get("src.archive.dir", "") or "",
+        after_pickup=_titlecase(src_opts.get("src.file.delete", "")),
     )
     task.target = FileOperation(
         connection_name=tgt_conn.get("name", "") or "",
@@ -120,6 +129,7 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
         directory=tgt_opts.get("tgt.download.path", "") or "",
         file_exists_action=_titlecase(tgt_opts.get("fileExistsAction", "")),
         actions=actions,
+        action_detail="; ".join(detail),
     )
     return task
 

@@ -209,6 +209,8 @@ def _downstream_rows(integration: Integration) -> List[List[str]]:
             notes = [task.description] if task.description else []
             if tgt.actions:
                 notes.append("Action: " + ", ".join(tgt.actions))
+            if tgt.action_detail:
+                notes.append(tgt.action_detail)
             rows.append([
                 str(len(rows) + 1), task.name, "\n".join(protocol),
                 f"Target Directory: {tgt.directory}" if tgt.directory else "",

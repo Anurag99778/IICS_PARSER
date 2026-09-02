@@ -52,6 +52,21 @@ class ExpressionField:
 
 
 @dataclass
+class FieldMapping:
+    """One incoming field wired to one target column.
+
+    This is the column-level lineage - ``o_proj_unit -> SEGMENT_1`` - that says
+    which computed value lands in which column of the target object.
+    """
+
+    from_field: str
+    to_field: str
+
+    def __str__(self) -> str:
+        return f"{self.from_field} → {self.to_field}"
+
+
+@dataclass
 class LookupCondition:
     left: str
     operator: str
@@ -91,6 +106,7 @@ class Transformation:
     truncate_target: bool = False
     update_columns: List[str] = field(default_factory=list)
     field_count: int = 0
+    field_mappings: List[FieldMapping] = field(default_factory=list)
     group_expressions: List[str] = field(default_factory=list)   # Router/Filter conditions
     unsupported: bool = False    # parsed but kind unknown to this version
 
@@ -156,7 +172,9 @@ class FileOperation:
     file_pattern: str = ""
     archive_directory: str = ""
     file_exists_action: str = ""
+    after_pickup: str = ""       # what happens to the source file: KEEP/ARCHIVE/DELETE
     actions: List[str] = field(default_factory=list)
+    action_detail: str = ""      # e.g. the PGP key an encrypt step uses
 
     @property
     def connection_display(self) -> str:

@@ -309,3 +309,31 @@ def test_shaping_transformations_are_reported(integration):
     rows = mapping_detail_rows(integration)
     lnd_to_ff = [r for r in rows if r[4] == "m_LND_TO_FF_CONCUR_EMPLOYYE_OUTBOUND"]
     assert any("Aggregator" in r[10] and "Sorter" in r[10] for r in lnd_to_ff)
+
+
+def test_target_field_mappings_are_captured(integration):
+    """Column-level lineage: which incoming field lands in which column."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_LND_STG_CONCUR_LOAD_TRX_710_OUTBOUND_PROJECTS_DATA")
+    target = next(t for t in mapping.targets if t.field_mappings)
+    pairs = {fm.from_field: fm.to_field for fm in target.field_mappings}
+    assert pairs["O_TRX710"] == "TRX_TYPE"
+    assert pairs["o_proj_unit"] == "SEGMENT_1"
+    assert pairs["PROJECT_NUMBER"] == "SEGMENT_3"
+
+
+def test_field_mappings_reach_the_field_level_sheet(integration):
+    rows = field_level_rows(integration)
+    pairs = {(r[5], r[6]) for r in rows}
+    assert ("O_TRX710", "→ TRX_TYPE") in pairs
+    assert ("o_proj_unit", "→ SEGMENT_1") in pairs
+
+
+def test_encryption_and_retention_detail_is_captured(integration):
+    """PGP keys and source-file retention matter for a migration."""
+    sftp = next(t for t in integration.tasks
+                if t.name == "fit_LOCAL_FF_CONCUR_SFTP_EMPLOYEE_DETAILS")
+    assert "0x92241FDB9AFF10B5" in sftp.target.action_detail
+    unzip = next(t for t in integration.tasks
+                 if t.name == "fit_ERP_EXTRACT_CONCUR_LOCAL_FF_UNZIP_PM_DETAILS")
+    assert unzip.source.after_pickup == "Archive"

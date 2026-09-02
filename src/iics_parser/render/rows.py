@@ -102,10 +102,14 @@ def _object_pairs(step: Step) -> List[ObjectPair]:
             notes.append(f"File pattern: {src.file_pattern}")
         if src and src.archive_directory:
             notes.append(f"Archive directory: {src.archive_directory}")
+        if src and src.after_pickup:
+            notes.append(f"Source file after pickup: {src.after_pickup}")
         if tgt and tgt.file_exists_action:
             notes.append(f"If file exists: {tgt.file_exists_action}")
         if tgt and tgt.actions:
             notes.append("Action: " + ", ".join(tgt.actions))
+        if tgt and tgt.action_detail:
+            notes.append(tgt.action_detail)
         return [ObjectPair(
             source_connection=src.connection_display if src else "",
             source_object=src.directory if src else "",
@@ -312,6 +316,16 @@ def field_level_rows(integration: Integration) -> List[List[str]]:
                     if f.field_type == "VARIABLE":
                         note = _join(note, "Variable field")
                     entries.append((f.name, f.expression, "", note))
+
+            # Column-level lineage: which field lands in which target column.
+            for target in mapping.targets:
+                for fm in target.field_mappings:
+                    entries.append((
+                        fm.from_field,
+                        f"→ {fm.to_field}",
+                        "",
+                        f"Target column · {target.object_name or target.name}",
+                    ))
 
         if not entries:
             continue
