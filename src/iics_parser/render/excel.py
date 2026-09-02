@@ -20,6 +20,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .. import coverage
+from ..coverage import CoverageLine
 from ..model.ir import Integration
 from .rows import (
     FIELD_LEVEL_COLUMNS,
@@ -91,11 +93,11 @@ def write_workbook(integration: Integration, path: Path) -> Path:
     # Cell repairs are reported so a reader is never silently shown a
     # shortened value as if it were complete.
     notes: List[str] = []
-    _sheet(wb, "Mapping Details", title, MAPPING_DETAIL_COLUMNS,
-           mapping_detail_rows(integration), notes)
-    _sheet(wb, "Field level mapping", title, FIELD_LEVEL_COLUMNS,
-           field_level_rows(integration), notes)
-    _report_sheet(wb, integration, notes)
+    detail = mapping_detail_rows(integration)
+    fields = field_level_rows(integration)
+    _sheet(wb, "Mapping Details", title, MAPPING_DETAIL_COLUMNS, detail, notes)
+    _sheet(wb, "Field level mapping", title, FIELD_LEVEL_COLUMNS, fields, notes)
+    _report_sheet(wb, integration, notes, coverage.audit(integration, detail, fields))
 
     wb.save(path)
     return path
@@ -139,7 +141,8 @@ def _sheet(wb: Workbook, name: str, title: str, columns: List[str],
 
 
 def _report_sheet(wb: Workbook, integration: Integration,
-                  cell_notes: Optional[List[str]] = None) -> None:
+                  cell_notes: Optional[List[str]] = None,
+                  coverage_lines: Optional[List[CoverageLine]] = None) -> None:
     """Everything the parser wants a human to look at."""
     ws = wb.create_sheet("Parse Report")
     ws.cell(row=2, column=2, value="Parse Report").font = _TITLE_FONT
@@ -161,6 +164,41 @@ def _report_sheet(wb: Workbook, integration: Integration,
         ws.cell(row=row, column=2, value=label).font = Font(bold=True, size=10)
         ws.cell(row=row, column=3, value=value).alignment = _TOP_LEFT
         row += 1
+
+    # Coverage: what the package held vs what these sheets show. This is the
+    # check that catches a whole category being missed, which no individual
+    # parse failure would reveal.
+    if coverage_lines:
+        totals = coverage.overall(coverage_lines)
+        row += 1
+        ws.cell(row=row, column=2, value="Coverage").font = _TITLE_FONT
+        ws.cell(row=row, column=3,
+                value=f"{totals['percent']}% of objects found in the package "
+                      f"appear in this workbook").alignment = _TOP_LEFT
+        row += 1
+
+        for header, col in (("Category", 2), ("Result", 3), ("Not represented", 4)):
+            cell = ws.cell(row=row, column=col, value=header)
+            cell.font = _HEADER_FONT
+            cell.fill = _HEADER_FILL
+            cell.alignment = _TOP_LEFT
+        row += 1
+
+        for line in coverage_lines:
+            ws.cell(row=row, column=2, value=line.category).alignment = _TOP_LEFT
+            result = ws.cell(row=row, column=3, value=line.summary)
+            result.alignment = _TOP_LEFT
+            if not line.complete:
+                result.font = Font(bold=True, color="9C4221", size=10)
+            detail = "; ".join(line.missing[:6])
+            if len(line.missing) > 6:
+                detail += f" … and {len(line.missing) - 6} more"
+            if detail and line.note:
+                detail = f"{detail}  ({line.note})"
+            value, _ = clean_cell(detail)
+            ws.cell(row=row, column=4, value=value).alignment = _TOP_LEFT
+            ws.merge_cells(start_row=row, start_column=4, end_row=row, end_column=6)
+            row += 1
 
     row += 1
     ws.cell(row=row, column=2, value="Items needing review").font = _TITLE_FONT

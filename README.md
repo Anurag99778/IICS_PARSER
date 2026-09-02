@@ -120,6 +120,25 @@ Everything renders from the same intermediate representation, so the Excel and
 Word outputs can never disagree. Adding a new output (an OIC target-design doc,
 a portfolio-wide complexity report) means adding a renderer, not another parser.
 
+### Checking an integration you have never seen
+
+Every workbook carries a **Coverage** table in its Parse Report: for each
+category of object found in the package, how many reached the output.
+
+```
+Coverage                      100% of objects found in the package appear here
+  Taskflow steps              22/22 — complete
+  Mappings reached by a step   9/9 — complete
+  Target column mappings      33/33 — complete
+  ...
+```
+
+This is deliberately not the parser's own opinion of how it did — it re-reads
+the package and the rendered rows and compares them, so a whole category going
+missing is visible even when no individual step reported a problem. Anything
+short of complete names the specific objects. Read this first on a new
+integration; it is the fastest way to know whether the analysis is whole.
+
 ### Handling integrations this parser has not seen
 
 Transformation types are resolved through each mapping file's own
@@ -135,7 +154,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 54 tests
+python -m pytest        # 57 tests
 ```
 
 ## Requirements

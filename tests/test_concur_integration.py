@@ -337,3 +337,42 @@ def test_encryption_and_retention_detail_is_captured(integration):
     unzip = next(t for t in integration.tasks
                  if t.name == "fit_ERP_EXTRACT_CONCUR_LOCAL_FF_UNZIP_PM_DETAILS")
     assert unzip.source.after_pickup == "Archive"
+
+
+# -------------------------------------------------------------- coverage
+
+def test_coverage_is_complete_for_the_reference_package(integration):
+    from iics_parser import coverage
+    lines = coverage.audit(integration, mapping_detail_rows(integration),
+                           field_level_rows(integration))
+    incomplete = [(l.category, l.summary, l.missing) for l in lines if not l.complete]
+    assert not incomplete, f"objects missing from the output: {incomplete}"
+    assert coverage.overall(lines)["percent"] == 100
+
+
+def test_coverage_detects_dropped_rows(integration):
+    """A check that can only report success is worthless - prove it fails."""
+    from iics_parser import coverage
+    detail = mapping_detail_rows(integration)
+    fields = field_level_rows(integration)
+
+    lines = coverage.audit(integration, detail[:-5], fields)
+    assert any(l.category == "Taskflow steps" and not l.complete for l in lines)
+
+    lines = coverage.audit(integration, detail, fields[:-12])
+    assert any(not l.complete for l in lines)
+
+
+def test_coverage_detects_a_broken_task_to_mapping_link(tmp_path):
+    """The failure mode that would otherwise be invisible."""
+    from iics_parser import coverage
+    package = ExportPackage.open(SAMPLE, tmp_path / "pkg")
+    integration = build_integration(package)
+    broken = next(s for s in integration.steps if s.task and s.task.mapping)
+    orphaned = broken.task.mapping.name
+    broken.task.mapping = None
+
+    lines = coverage.audit(integration, mapping_detail_rows(integration),
+                           field_level_rows(integration))
+    unreached = next(l for l in lines if l.category == "Mappings reached by a step")
+    assert orphaned in unreached.missing
