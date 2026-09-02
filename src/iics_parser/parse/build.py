@@ -66,6 +66,12 @@ def build_integration(package: ExportPackage,
 
     # 4. Taskflow - gives execution order and step-level parameters.
     taskflows = package.by_type("TASKFLOW")
+    if len(taskflows) > 1:
+        warnings.append(
+            "Package contains %d taskflows (%s); only '%s' was analysed - "
+            "export the others separately"
+            % (len(taskflows), ", ".join(t.name for t in taskflows), taskflows[0].name)
+        )
     if taskflows:
         meta, steps = parse_taskflow(taskflows[0].path, warnings)
         integration.meta = meta

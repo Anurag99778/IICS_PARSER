@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from iics_parser.extract.package import Asset
-from iics_parser.model.ir import Connection, Integration, IntegrationMeta, Mapping, Step
+from iics_parser.model.ir import (Connection, Integration, IntegrationMeta, Mapping,
+                                  Step, TaskParameter)
 from iics_parser.parse.mapping import _resolve_kind, flow_string, parse_mapping
 from iics_parser.render.rows import field_level_rows, mapping_detail_rows
 
@@ -190,3 +191,87 @@ def test_excel_and_word_render_a_minimal_integration(tmp_path):
 
     assert write_workbook(integration, tmp_path / "a.xlsx").exists()
     assert write_document(integration, tmp_path / "a.docx").exists()
+
+
+# ------------------------------------------------- worksheet cell constraints
+
+def test_control_characters_do_not_break_the_workbook(tmp_path):
+    """SQL and email bodies carry control characters Excel's XML cannot hold."""
+    from iics_parser.render.excel import write_workbook
+    integration = Integration(meta=IntegrationMeta(taskflow_name="tf_CTRL"))
+    step = Step(seq="1", title="Notify", step_type="Notification Task")
+    step.parameters = [TaskParameter(name="Email_Body", value="line\x0bbreak\x00null")]
+    integration.steps.append(step)
+
+    path = write_workbook(integration, tmp_path / "ctrl.xlsx")
+    import openpyxl
+    values = [c.value for r in openpyxl.load_workbook(path)["Mapping Details"].iter_rows()
+              for c in r if c.value]
+    assert any("linebreaknull" in str(v) for v in values)
+
+
+def test_oversized_cell_is_truncated_visibly(tmp_path):
+    """Excel silently clips past 32,767 chars - say so rather than mislead."""
+    from iics_parser.render.excel import MAX_CELL_CHARS, write_workbook
+    integration = Integration(meta=IntegrationMeta(taskflow_name="tf_BIG"))
+    step = Step(seq="1", title="Load", step_type="Mapping Task")
+    step.parameters = [TaskParameter(name="Pre SQL", value="A" * (MAX_CELL_CHARS + 5000))]
+    integration.steps.append(step)
+
+    path = write_workbook(integration, tmp_path / "big.xlsx")
+    import openpyxl
+    wb = openpyxl.load_workbook(path)
+    longest = max(len(str(c.value)) for r in wb["Mapping Details"].iter_rows()
+                  for c in r if c.value)
+    assert longest <= MAX_CELL_CHARS
+    report = "\n".join(str(c.value) for r in wb["Parse Report"].iter_rows()
+                       for c in r if c.value)
+    assert "truncated" in report, "a shortened cell must be reported, not hidden"
+
+
+def test_deep_mapping_chain_does_not_overflow_the_stack():
+    """A long chain must not raise RecursionError."""
+    from iics_parser.model.ir import Transformation
+    mapping = Mapping(name="m_DEEP")
+    n = 1500
+    mapping.transformations = [Transformation(name=f"t{i}", kind="Expression")
+                               for i in range(n)]
+    mapping.links = [{"from": f"t{i}", "to": f"t{i+1}"} for i in range(n - 1)]
+    assert flow_string(mapping)
+
+
+def test_wide_mapping_does_not_produce_unbounded_paths():
+    """A wide graph has combinatorially many paths; the output stays bounded."""
+    from iics_parser.model.ir import Transformation
+    from iics_parser.parse.mapping import _MAX_PATHS
+    mapping = Mapping(name="m_WIDE")
+    tx = [Transformation(name=f"src{i}", kind="Source") for i in range(12)]
+    tx += [Transformation(name=f"mid{i}", kind="Expression") for i in range(12)]
+    tx += [Transformation(name=f"tgt{i}", kind="Target") for i in range(12)]
+    mapping.transformations = tx
+    mapping.links = [{"from": f"src{i}", "to": f"mid{j}"}
+                     for i in range(12) for j in range(12)]
+    mapping.links += [{"from": f"mid{i}", "to": f"tgt{j}"}
+                      for i in range(12) for j in range(12)]
+    assert len(flow_string(mapping).splitlines()) <= _MAX_PATHS + 1
+
+
+def test_extra_taskflows_are_reported(tmp_path):
+    """Only one taskflow is analysed - a second must not vanish silently."""
+    from iics_parser.extract.package import Asset, ExportPackage
+
+    class TwoFlows(ExportPackage):
+        def __init__(self):
+            self.root = tmp_path
+            self.metadata = {}
+            self.warnings = []
+            self.assets = [
+                Asset(name="tf_A", obj_type="TASKFLOW", path=tmp_path / "a.xml"),
+                Asset(name="tf_B", obj_type="TASKFLOW", path=tmp_path / "b.xml"),
+            ]
+
+    from iics_parser.parse.build import build_integration
+    (tmp_path / "a.xml").write_text("<root/>")
+    (tmp_path / "b.xml").write_text("<root/>")
+    integration = build_integration(TwoFlows())
+    assert any("2 taskflows" in w for w in integration.warnings)

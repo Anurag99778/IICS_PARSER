@@ -134,7 +134,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 44 tests
+python -m pytest        # 51 tests
 ```
 
 ## Requirements

@@ -11,8 +11,9 @@ a reviewer can see what needs a human eye instead of discovering it later.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -34,6 +35,43 @@ _STEP_FILL = PatternFill("solid", fgColor="F2F6FA")
 _BORDER = Border(*[Side(style="thin", color="BFBFBF")] * 4)
 _TOP_LEFT = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
+#: Excel's hard per-cell limit. Longer values make the file unopenable, and
+#: openpyxl clips them silently, so we clip deliberately and say so.
+MAX_CELL_CHARS = 32767
+_TRUNCATED = "\n… [truncated — see the source asset for the full value]"
+
+#: Control characters Excel's XML cannot carry. Tabs, newlines and carriage
+#: returns are legal and must survive; the rest appear in SQL and email bodies
+#: often enough to matter, and raise IllegalCharacterError if left in.
+_ILLEGAL_CHARS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def clean_cell(value: object) -> Tuple[Optional[str], Optional[str]]:
+    """Make a value safe for a worksheet cell.
+
+    Returns ``(value, note)`` where ``note`` describes any change made, so the
+    Parse Report can tell a reader that a cell is not the whole story.
+    """
+    if value is None or value == "":
+        return None, None
+    text = str(value)
+    note = None
+
+    stripped = _ILLEGAL_CHARS.sub("", text)
+    if stripped != text:
+        note = "contained control characters, which were removed"
+        text = stripped
+
+    if len(text) > MAX_CELL_CHARS:
+        keep = MAX_CELL_CHARS - len(_TRUNCATED)
+        lost = len(text) - keep
+        text = text[:keep] + _TRUNCATED
+        note = (f"was {lost:,} characters over Excel's {MAX_CELL_CHARS:,}-character "
+                f"cell limit and was truncated")
+
+    return text, note
+
+
 #: Per-sheet column widths, in the order of the column lists.
 _WIDTHS = {
     "Mapping Details": [7, 26, 18, 38, 38, 18, 40, 34, 26, 32, 40, 26, 32, 44, 40],
@@ -50,18 +88,21 @@ def write_workbook(integration: Integration, path: Path) -> Path:
     wb.remove(wb.active)
 
     title = f"{integration.meta.taskflow_name} - Analysis"
+    # Cell repairs are reported so a reader is never silently shown a
+    # shortened value as if it were complete.
+    notes: List[str] = []
     _sheet(wb, "Mapping Details", title, MAPPING_DETAIL_COLUMNS,
-           mapping_detail_rows(integration))
+           mapping_detail_rows(integration), notes)
     _sheet(wb, "Field level mapping", title, FIELD_LEVEL_COLUMNS,
-           field_level_rows(integration))
-    _report_sheet(wb, integration)
+           field_level_rows(integration), notes)
+    _report_sheet(wb, integration, notes)
 
     wb.save(path)
     return path
 
 
-def _sheet(wb: Workbook, name: str, title: str,
-           columns: List[str], rows: List[List[str]]) -> None:
+def _sheet(wb: Workbook, name: str, title: str, columns: List[str],
+           rows: List[List[str]], notes: List[str]) -> None:
     ws = wb.create_sheet(name)
 
     ws.cell(row=2, column=2, value=title).font = _TITLE_FONT
@@ -79,7 +120,11 @@ def _sheet(wb: Workbook, name: str, title: str,
         # find step boundaries in a long sheet.
         new_step = bool(values and values[0])
         for c, value in enumerate(values, start=2):
-            cell = ws.cell(row=r, column=c, value=value or None)
+            safe, note = clean_cell(value)
+            if note:
+                column = columns[c - 2] if c - 2 < len(columns) else f"column {c}"
+                notes.append(f"'{name}' {get_column_letter(c)}{r} ({column}) {note}")
+            cell = ws.cell(row=r, column=c, value=safe)
             cell.alignment = _TOP_LEFT
             cell.border = _BORDER
             if new_step:
@@ -93,7 +138,8 @@ def _sheet(wb: Workbook, name: str, title: str,
     _finish(ws, header_row, len(columns))
 
 
-def _report_sheet(wb: Workbook, integration: Integration) -> None:
+def _report_sheet(wb: Workbook, integration: Integration,
+                  cell_notes: Optional[List[str]] = None) -> None:
     """Everything the parser wants a human to look at."""
     ws = wb.create_sheet("Parse Report")
     ws.cell(row=2, column=2, value="Parse Report").font = _TITLE_FONT
@@ -119,9 +165,11 @@ def _report_sheet(wb: Workbook, integration: Integration) -> None:
     row += 1
     ws.cell(row=row, column=2, value="Items needing review").font = _TITLE_FONT
     row += 1
-    if integration.warnings:
-        for warning in integration.warnings:
-            ws.cell(row=row, column=2, value=warning).alignment = _TOP_LEFT
+    items = list(integration.warnings) + list(cell_notes or [])
+    if items:
+        for item in items:
+            value, _ = clean_cell(item)
+            ws.cell(row=row, column=2, value=value).alignment = _TOP_LEFT
             ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=6)
             row += 1
     else:

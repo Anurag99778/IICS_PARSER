@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..extract.package import Asset
 from ..model.ir import Connection, ExpressionField, LookupCondition, Mapping, Transformation
@@ -292,11 +292,22 @@ def flow_string(mapping: Mapping) -> str:
         if t.name not in has_incoming and (t.kind == "Source" or t.name in adjacency)
     ]
 
+    # The cap is on the mapping as a whole, not per source - a wide graph has
+    # many sources, each of which could otherwise spend the full budget.
     chains: List[str] = []
+    truncated = False
     for start in starts:
+        if len(chains) >= _MAX_PATHS:
+            truncated = True
+            break
         for path in _walk(start, adjacency, set()):
             if len(path) > 1:
                 chains.append("->".join(path))
+            if len(chains) >= _MAX_PATHS:
+                truncated = True
+                break
+    if truncated:
+        chains.append(f"… flow truncated at {_MAX_PATHS} paths — see the mapping diagram")
 
     unconnected = [t.name for t in mapping.lookups if t.lookup_unconnected]
     if unconnected:
@@ -312,16 +323,42 @@ def flow_string(mapping: Mapping) -> str:
     return "\n".join(chains)
 
 
+#: Guards for pathological mapping graphs. A wide graph can hold combinatorially
+#: many source-to-target paths, and a long chain would overflow the interpreter
+#: stack if walked recursively - neither should take the run down.
+_MAX_PATHS = 200
+_MAX_PATH_LENGTH = 400
+
+
 def _walk(node: str, adjacency: Dict[str, List[str]], seen: set) -> List[List[str]]:
-    """All simple paths from ``node`` to leaf nodes."""
-    if node in seen:
-        return [[node]]
-    seen = seen | {node}
-    children = adjacency.get(node, [])
-    if not children:
-        return [[node]]
-    paths = []
-    for child in children:
-        for tail in _walk(child, adjacency, seen):
-            paths.append([node] + tail)
-    return paths
+    """Simple paths from ``node`` to leaf nodes, iteratively and bounded.
+
+    Written as an explicit stack rather than recursion so a long mapping chain
+    cannot raise ``RecursionError``, and capped so a wide graph cannot generate
+    paths without limit.
+    """
+    paths: List[List[str]] = []
+    stack: List[Tuple[str, List[str], frozenset]] = [(node, [], frozenset(seen))]
+
+    while stack:
+        current, prefix, visited = stack.pop()
+        path = prefix + [current]
+
+        if current in visited or len(path) >= _MAX_PATH_LENGTH:
+            paths.append(path)
+            continue
+
+        children = adjacency.get(current, [])
+        if not children:
+            paths.append(path)
+            continue
+
+        if len(paths) + len(stack) >= _MAX_PATHS:
+            paths.append(path + ["…"])
+            continue
+
+        onward = visited | {current}
+        for child in reversed(children):
+            stack.append((child, path, onward))
+
+    return paths[:_MAX_PATHS]
