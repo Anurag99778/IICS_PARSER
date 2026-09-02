@@ -15,9 +15,19 @@ pip install -e .
 iics-parser export.zip -o output/
 ```
 
+> **If `iics-parser` is "not recognized" (common on Windows):** pip installs the
+> command into a `Scripts` directory that is often not on PATH. Use the module
+> form instead — identical arguments, no PATH needed:
+>
+> ```bash
+> python -m iics_parser export.zip -o output/
+> ```
+
 ## Usage
 
 ```bash
+# Every example below also works as `python -m iics_parser ...`
+
 # One package
 iics-parser tf_HUB_CONCUR_EMPLOYEE_DETAILS_OUTBOUND_FIN_I_HR001.zip -o output/
 
