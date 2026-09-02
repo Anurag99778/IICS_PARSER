@@ -1,0 +1,142 @@
+"""Write the integration analysis workbook.
+
+Two sheets, mirroring the hand-built analysis:
+
+* **Mapping Details** - one row per source/target leg of each taskflow step
+* **Field level mapping** - one row per expression field and parameter
+
+A third **Parse Report** sheet lists anything the parser could not resolve, so
+a reviewer can see what needs a human eye instead of discovering it later.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import List
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
+
+from ..model.ir import Integration
+from .rows import (
+    FIELD_LEVEL_COLUMNS,
+    MAPPING_DETAIL_COLUMNS,
+    field_level_rows,
+    mapping_detail_rows,
+)
+
+_TITLE_FONT = Font(bold=True, size=13)
+_HEADER_FONT = Font(bold=True, color="FFFFFF", size=10)
+_HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
+_STEP_FILL = PatternFill("solid", fgColor="F2F6FA")
+_BORDER = Border(*[Side(style="thin", color="BFBFBF")] * 4)
+_TOP_LEFT = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+#: Per-sheet column widths, in the order of the column lists.
+_WIDTHS = {
+    "Mapping Details": [7, 26, 18, 38, 38, 18, 40, 34, 26, 32, 40, 26, 32, 44, 40],
+    "Field level mapping": [7, 26, 18, 38, 38, 20, 52, 34, 28],
+}
+
+
+def write_workbook(integration: Integration, path: Path) -> Path:
+    """Render ``integration`` to an .xlsx workbook at ``path``."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    title = f"{integration.meta.taskflow_name} - Analysis"
+    _sheet(wb, "Mapping Details", title, MAPPING_DETAIL_COLUMNS,
+           mapping_detail_rows(integration))
+    _sheet(wb, "Field level mapping", title, FIELD_LEVEL_COLUMNS,
+           field_level_rows(integration))
+    _report_sheet(wb, integration)
+
+    wb.save(path)
+    return path
+
+
+def _sheet(wb: Workbook, name: str, title: str,
+           columns: List[str], rows: List[List[str]]) -> None:
+    ws = wb.create_sheet(name)
+
+    ws.cell(row=2, column=2, value=title).font = _TITLE_FONT
+
+    header_row = 4
+    for i, column in enumerate(columns, start=2):
+        cell = ws.cell(row=header_row, column=i, value=column)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = _BORDER
+
+    for r, values in enumerate(rows, start=header_row + 1):
+        # A filled S. No marks the start of a step - tint it so the eye can
+        # find step boundaries in a long sheet.
+        new_step = bool(values and values[0])
+        for c, value in enumerate(values, start=2):
+            cell = ws.cell(row=r, column=c, value=value or None)
+            cell.alignment = _TOP_LEFT
+            cell.border = _BORDER
+            if new_step:
+                cell.fill = _STEP_FILL
+                if c in (2, 3):
+                    cell.font = Font(bold=True, size=10)
+
+    for i, width in enumerate(_WIDTHS.get(name, []), start=2):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    _finish(ws, header_row, len(columns))
+
+
+def _report_sheet(wb: Workbook, integration: Integration) -> None:
+    """Everything the parser wants a human to look at."""
+    ws = wb.create_sheet("Parse Report")
+    ws.cell(row=2, column=2, value="Parse Report").font = _TITLE_FONT
+
+    meta = integration.meta
+    summary = [
+        ("Taskflow", meta.taskflow_name),
+        ("Project / Folder", meta.project),
+        ("Source org", meta.source_org),
+        ("Version", meta.version_label),
+        ("Last modified", f"{meta.modified_date} by {meta.modified_by}".strip(" by")),
+        ("Steps parsed", str(len(integration.steps))),
+        ("Mappings parsed", str(len(integration.mappings))),
+        ("Tasks parsed", str(len(integration.tasks))),
+        ("Connections", str(len(integration.connections))),
+    ]
+    row = 4
+    for label, value in summary:
+        ws.cell(row=row, column=2, value=label).font = Font(bold=True, size=10)
+        ws.cell(row=row, column=3, value=value).alignment = _TOP_LEFT
+        row += 1
+
+    row += 1
+    ws.cell(row=row, column=2, value="Items needing review").font = _TITLE_FONT
+    row += 1
+    if integration.warnings:
+        for warning in integration.warnings:
+            ws.cell(row=row, column=2, value=warning).alignment = _TOP_LEFT
+            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=6)
+            row += 1
+    else:
+        ws.cell(row=row, column=2,
+                value="None - every asset in the package was parsed.").alignment = _TOP_LEFT
+
+    ws.column_dimensions["B"].width = 34
+    for col in "CDEF":
+        ws.column_dimensions[col].width = 30
+    ws.sheet_view.showGridLines = False
+
+
+def _finish(ws: Worksheet, header_row: int, column_count: int) -> None:
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=2)
+    ws.auto_filter.ref = (
+        f"B{header_row}:{get_column_letter(column_count + 1)}{ws.max_row}"
+    )
+    ws.sheet_view.showGridLines = False

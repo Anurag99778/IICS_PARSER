@@ -1,0 +1,24 @@
+# Values an IICS export package cannot contain - organisational facts rather
+# than metadata. Anything set here wins over parsed and AI-drafted values.
+#
+#   iics-parser export.zip --overrides overrides.yaml
+#
+# Generate a pre-populated starting point for a package with:
+#   iics-parser export.zip --init-overrides overrides.yaml
+
+defaults:
+  business_owner: Finance
+  environments: DEV, TEST, UAT, PROD
+  upstream_app_owner: Finance Group (Informatica Hub Owner)
+  downstream_app_owner: Finance (Concur Owner)
+  business_process: IICS to OIC Migration
+
+integrations:
+  tf_HUB_CONCUR_EMPLOYEE_DETAILS_OUTBOUND_FIN_I_HR001:
+    business_process_name: Finance Solutions - Concur
+    technical_owner: Finance Solutions - Concur
+    criticality: Medium
+    trigger_type: Schedule
+    integration_pattern: Batch
+    schedule_note: Scheduled daily, triggers around 3:00 AM PDT
+    last_reviewed: 24-Aug-2026

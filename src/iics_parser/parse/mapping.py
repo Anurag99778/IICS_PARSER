@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..extract.package import Asset
-from ..model.ir import ExpressionField, LookupCondition, Mapping, Transformation
+from ..model.ir import Connection, ExpressionField, LookupCondition, Mapping, Transformation
 
 #: Informatica class-name fragment -> canonical transformation kind.
 _KIND_BY_CLASS = {
@@ -59,12 +59,12 @@ _KIND_BY_CLASS = {
 }
 
 
-def parse_mapping(asset: Asset, connections: Dict[str, str],
+def parse_mapping(asset: Asset, connections: Dict[str, "Connection"],
                   image_dir: Optional[Path] = None,
                   warnings: Optional[List[str]] = None) -> Mapping:
     """Build a :class:`Mapping` from an expanded ``.DTEMPLATE`` directory.
 
-    ``connections`` maps a connection GUID to its display name.
+    ``connections`` maps a connection GUID to its :class:`Connection`.
     """
     warnings = warnings if warnings is not None else []
     mapping = Mapping(name=asset.name, description=asset.description, guid=asset.guid)
@@ -146,7 +146,7 @@ def _extract_preview(asset: Asset, image_dir: Optional[Path]) -> str:
 # ------------------------------------------------------------ transformation
 
 def _parse_transformation(raw: dict, class_info: Dict[str, str],
-                          connections: Dict[str, str], mapping_name: str,
+                          connections: Dict[str, Connection], mapping_name: str,
                           warnings: List[str]) -> Transformation:
     class_name = class_info.get(str(raw.get("$$class")), "")
     kind, unsupported = _resolve_kind(class_name)
@@ -161,8 +161,11 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
     adapter = raw.get("dataAdapter") or {}
     if adapter:
         guid = str(adapter.get("connectionId", "")).split("@")[-1]
-        tx.connection_name = connections.get(guid, "")
-        tx.connection_type = adapter.get("typeSystem", "") or ""
+        conn = connections.get(guid)
+        tx.connection_name = conn.name if conn else ""
+        # The connection asset carries the user-facing type; typeSystem is the
+        # adapter's internal name and is only a fallback.
+        tx.connection_type = (conn.conn_type if conn else "") or adapter.get("typeSystem", "") or ""
 
         obj = adapter.get("object") or {}
         tx.object_name = obj.get("objectName") or obj.get("name") or ""

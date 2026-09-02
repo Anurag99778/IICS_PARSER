@@ -8,6 +8,20 @@ from ..extract.package import Asset
 from ..model.ir import Connection, FileOperation, Task, TaskParameter
 
 
+#: Internal connector names -> the label people use in the analysis documents.
+_CONNECTION_TYPE_ALIASES = {
+    "csvfile": "Flat File",
+    "flatfile": "Flat File",
+    "sqlserver": "SQL Server",
+    "local": "Local Folder",
+}
+
+
+def connection_type_label(raw: str) -> str:
+    """Normalise a connector type to its user-facing name."""
+    return _CONNECTION_TYPE_ALIASES.get((raw or "").strip().lower(), raw or "")
+
+
 def parse_connection(asset: Asset) -> Optional[Connection]:
     """Read ``connection.json`` from an expanded ``cn_*.Connection`` asset."""
     data = asset.load_json("connection.json")
@@ -19,9 +33,11 @@ def parse_connection(asset: Asset) -> Optional[Connection]:
 
     return Connection(
         name=obj.get("name", asset.name),
-        # instanceDisplayName is the user-facing type ("Flat File"); `type` is
-        # the internal one. Prefer the display name where present.
-        conn_type=obj.get("instanceDisplayName") or obj.get("type", "") or "",
+        # instanceDisplayName is the user-facing type where IICS sets one
+        # ("Advanced SFTP V2"); otherwise fall back to the internal type.
+        conn_type=connection_type_label(
+            obj.get("instanceDisplayName") or obj.get("type", "") or ""
+        ),
         guid=obj.get("federatedId", "") or asset.guid,
         host=obj.get("host", "") or "",
         database=obj.get("database", "") or "",
@@ -109,15 +125,13 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
 
 
 def _conn_type(conn: dict) -> str:
-    """``local`` is IICS's internal name for a local folder."""
-    t = conn.get("type", "") or ""
-    return "Local Folder" if t.lower() == "local" else t
+    return connection_type_label(conn.get("type", "") or "")
 
 
 def _titlecase(value: str) -> str:
     return value.capitalize() if value.isupper() else value
 
 
-def build_connection_index(connections: List[Connection]) -> Dict[str, str]:
-    """GUID -> connection name, for resolving ``dataAdapter.connectionId``."""
-    return {c.guid: c.name for c in connections if c.guid}
+def build_connection_index(connections: List[Connection]) -> Dict[str, Connection]:
+    """GUID -> connection, for resolving ``dataAdapter.connectionId``."""
+    return {c.guid: c for c in connections if c.guid}

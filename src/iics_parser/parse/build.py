@@ -97,13 +97,9 @@ def _derive_defaults(integration: Integration) -> None:
     """Fill metadata that is safely derivable from the package itself."""
     meta = integration.meta
 
-    if not meta.description:
-        # Best available description: the taskflow's own, else the first
-        # meaningful task description.
-        for task in integration.tasks:
-            if task.description:
-                meta.description = task.description.strip()
-                break
+    # Only the taskflow's own description describes the integration. A step's
+    # description describes that step, so it is left for AI or a human rather
+    # than passed off as the integration's business purpose.
 
     if not meta.display_name:
         meta.display_name = meta.taskflow_name
