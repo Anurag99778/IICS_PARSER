@@ -470,9 +470,14 @@ def test_object_fields_reach_their_own_sheet(integration):
     rows = object_field_rows(integration)
     assert rows and all(len(r) == 14 for r in rows)
 
-    by_field = {(r[3] or "", r[5]): r for r in rows}
-    src = next(r for k, r in by_field.items() if k[1] == "PM_END_DATE")
-    assert src[6] == "string" and src[7] == "510"
+    # The transformation name is written once per group, so match on the row
+    # content rather than assuming every row repeats it.
+    src = next(r for r in rows if r[5] == "PM_END_DATE" and r[6] == "string")
+    assert src[7] == "510" and src[9] == "nvarchar"
 
-    tgt = next(r for k, r in by_field.items() if k[1] == "SEGMENT_2")
+    tgt = next(r for r in rows if r[5] == "SEGMENT_2" and r[13])
     assert tgt[13] == "CARRYING_OUT_ORG_ID"      # Mapped From
+
+    # Every column of the reference target reaches the sheet.
+    segments = [r for r in rows if str(r[5]).startswith("SEGMENT_")]
+    assert len(segments) >= 13
