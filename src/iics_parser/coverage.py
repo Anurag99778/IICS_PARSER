@@ -49,6 +49,9 @@ def audit(integration: Integration,
     detail_text = _text_of(detail_rows)
     field_text = _text_of(field_rows)
     both = detail_text | field_text
+    # Multi-word values (option labels) are never whole tokens, so they need a
+    # substring check against the raw rendered text rather than the token set.
+    blob = _blob(detail_rows) + "\n" + _blob(field_rows)
 
     lines: List[CoverageLine] = []
 
@@ -120,7 +123,23 @@ def audit(integration: Integration,
                               len(with_preview),
                               [m.name for m in integration.mappings if not m.preview_image]))
 
-    # 9. Transformations that shape data but carry no condition of their own -
+    # 9. Ticked checkboxes - easy to lose because each is one boolean.
+    options, missing_options = [], []
+    for mapping in integration.mappings:
+        for tx in mapping.transformations:
+            for opt in tx.options:
+                options.append(opt)
+                if opt not in blob:
+                    missing_options.append(f"{mapping.name} · {tx.name} · {opt}")
+    for task in integration.tasks:
+        for opt in task.options:
+            options.append(opt)
+            if opt not in blob:
+                missing_options.append(f"{task.name} · {opt}")
+    lines.append(CoverageLine("Enabled options (checkboxes)", len(options),
+                              len(options) - len(missing_options), missing_options))
+
+    # 10. Transformations that shape data but carry no condition of their own -
     #    easy to lose, so confirm each is named somewhere.
     shaping, missing_shaping = [], []
     for mapping in integration.mappings:
@@ -145,6 +164,11 @@ def overall(lines: Sequence[CoverageLine]) -> Dict[str, int]:
         "percent": round(100 * covered / present) if present else 100,
         "incomplete_categories": sum(1 for l in lines if not l.complete),
     }
+
+
+def _blob(rows: Sequence[Sequence[str]]) -> str:
+    """All rendered text as one string, for phrase containment checks."""
+    return "\n".join(str(cell) for row in rows for cell in row if cell)
 
 
 def _text_of(rows: Sequence[Sequence[str]]) -> set:

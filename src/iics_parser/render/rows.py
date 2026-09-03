@@ -233,6 +233,8 @@ def _lookup_filter_note(mapping: Mapping) -> str:
             detail.append(f"Multiple Match: {lkp.lookup_multiple_match}")
         if lkp.lookup_unconnected:
             detail.append("Unconnected")
+        if lkp.options:
+            detail.append("Options: " + ", ".join(lkp.options))
         parts.append("\n".join(detail))
 
     for tx in mapping.transformations:
@@ -269,6 +271,9 @@ def _transform_notes(tx: Transformation) -> str:
         parts.append("Update Columns: " + ", ".join(tx.update_columns))
     if tx.sort_fields:
         parts.append("Sorted by: " + ", ".join(tx.sort_fields))
+    # Checkboxes ticked in the designer - only the enabled ones.
+    if tx.options:
+        parts.append("Options: " + ", ".join(tx.options))
     return "\n".join(parts)
 
 
@@ -282,6 +287,9 @@ def _step_notes(step: Step) -> str:
         parts.append(f"Path: {step.branch}")
     if step.on_error:
         parts.append(step.on_error)
+    ticked = list(step.options) + list(step.task.options if step.task else [])
+    if ticked:
+        parts.append("Settings: " + ", ".join(dict.fromkeys(ticked)))
     return "\n".join(dict.fromkeys(p for p in parts if p))
 
 

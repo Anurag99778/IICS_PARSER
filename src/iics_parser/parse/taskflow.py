@@ -38,6 +38,13 @@ _STEP_TYPES = {
     "restv2service": "Service Step",
 }
 
+#: Step checkboxes worth reporting when ticked, with their designer label.
+_STEP_OPTIONS = {
+    "Wait for Task to Complete": "Wait for task to complete",
+    "FailTaskIfAnyScriptFails": "Fail task if any script fails",
+    "Has Inout Parameters": "Has in-out parameters",
+}
+
 #: Step parameters worth surfacing; everything else is engine plumbing.
 _INTERESTING_PARAMS = {
     "Email To": "Email_To",
@@ -369,6 +376,11 @@ def _parse_service(el: ET.Element, branch: str, depth: int, on_error: str) -> St
 
         if pname == "taskField":
             step.parameters.extend(_task_field_params(param))
+            continue
+
+        if pname in _STEP_OPTIONS:
+            if _param_value(param).strip().lower() == "true":
+                step.options.append(_STEP_OPTIONS[pname])
             continue
 
         if pname in _INTERESTING_PARAMS:

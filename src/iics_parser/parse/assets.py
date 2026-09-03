@@ -73,6 +73,11 @@ def parse_mapping_task(asset: Asset) -> Optional[Task]:
             )
         )
 
+    if str(obj.get("enableCrossSchemaPushdown", "")).lower() == "true":
+        task.options.append("Cross-schema pushdown enabled")
+    if str(obj.get("enableParallelRun", "")).lower() == "true":
+        task.options.append("Parallel run enabled")
+
     # The mapping this task runs, as a GUID reference (@<guid>).
     task._mapping_ref = str(obj.get("mappingId", "") or "").lstrip("@")  # type: ignore[attr-defined]
     return task
@@ -114,6 +119,13 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
     tgt_opts = data.get("targetOptions") or {}
     src_conn = data.get("sourceConnection") or {}
     tgt_conn = data.get("targetConnection") or {}
+
+    if str(src_opts.get("filePatternFilter", "")).lower() == "true":
+        task.options.append("File pattern filter enabled")
+    if str(src_opts.get("fileStability", "")).lower() == "true":
+        task.options.append("File stability check enabled")
+    if str(data.get("allowConcurrency", "")).lower() == "true":
+        task.options.append("Concurrent execution allowed")
 
     task.source = FileOperation(
         connection_name=src_conn.get("name", "") or "",

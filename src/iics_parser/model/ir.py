@@ -107,6 +107,10 @@ class Transformation:
     update_columns: List[str] = field(default_factory=list)
     field_count: int = 0
     field_mappings: List[FieldMapping] = field(default_factory=list)
+    #: Options ticked in the IICS designer, e.g. "Forward Rejected Rows".
+    #: Only enabled ones are kept - an unticked box is the default and would
+    #: bury the meaningful settings in noise.
+    options: List[str] = field(default_factory=list)
     group_expressions: List[str] = field(default_factory=list)   # Router/Filter conditions
     unsupported: bool = False    # parsed but kind unknown to this version
 
@@ -198,6 +202,7 @@ class Task:
     source: Optional[FileOperation] = None
     target: Optional[FileOperation] = None
     schedule: str = ""
+    options: List[str] = field(default_factory=list)   # ticked task settings
 
 
 @dataclass
@@ -214,6 +219,7 @@ class Step:
     branch: str = ""             # parallel path / decision branch label
     on_error: str = ""
     depth: int = 0
+    options: List[str] = field(default_factory=list)   # ticked step settings
 
     @property
     def mapping_name(self) -> str:

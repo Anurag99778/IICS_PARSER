@@ -230,6 +230,8 @@ def _downstream_rows(integration: Integration) -> List[List[str]]:
                 notes.append(f"Pre SQL: {target.pre_sql}")
             if target.post_sql:
                 notes.append(f"Post SQL: {target.post_sql}")
+            if target.options:
+                notes.append("Options: " + ", ".join(target.options))
             rows.append([
                 str(len(rows) + 1), task.name, target.connection_display,
                 target.object_name or target.name,

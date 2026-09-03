@@ -376,3 +376,50 @@ def test_coverage_detects_a_broken_task_to_mapping_link(tmp_path):
                            field_level_rows(integration))
     unreached = next(l for l in lines if l.category == "Mappings reached by a step")
     assert orphaned in unreached.missing
+
+
+# ------------------------------------------------------- ticked checkboxes
+
+def test_target_checkboxes_are_captured(integration):
+    """Designer checkboxes are single booleans and easy to lose."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_ERP_LND_CONCUR_STG_TRX_760_EMPLOYEE_OUTBOUND")
+    target = next(t for t in mapping.targets if t.truncate_target)
+    assert "Truncate target" in target.options
+    assert "Forward Rejected Rows" in target.options
+
+
+def test_lookup_checkboxes_are_captured(integration):
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_LND_CONCUR_UPD_APPROVER_DETAILS")
+    lookup = next(t for t in mapping.lookups if t.name == "lkp_supervisor")
+    assert "Lookup caching enabled" in lookup.options
+    assert "Optional" in lookup.options
+
+
+def test_task_and_step_checkboxes_are_captured(integration):
+    task = next(t for t in integration.tasks
+                if t.name == "mct_LND_CONCUR_UPD_APPROVER_DETAILS")
+    assert "Cross-schema pushdown enabled" in task.options
+
+    fit = next(t for t in integration.tasks
+               if t.name == "fit_LOCAL_FF_CONCUR_SFTP_EMPLOYEE_DETAILS")
+    assert "File pattern filter enabled" in fit.options
+
+    step = next(s for s in integration.steps if s.title == "Generate FileLIST")
+    assert "Fail task if any script fails" in step.options
+
+
+def test_unticked_boxes_are_not_reported(integration):
+    """Only enabled options are kept - defaults would bury the real settings."""
+    every = [o for m in integration.mappings for t in m.transformations for o in t.options]
+    assert "Select distinct" not in every      # present in the package, but false
+    assert "Use bulk API" not in every
+
+
+def test_ticked_options_reach_the_spreadsheet(integration):
+    rows = mapping_detail_rows(integration)
+    text = "\n".join(str(c) for r in rows for c in r if c)
+    assert "Forward Rejected Rows" in text
+    assert "Lookup caching enabled" in text
+    assert "Cross-schema pushdown enabled" in text

@@ -27,6 +27,32 @@ from ..extract.package import Asset
 from ..model.ir import (Connection, ExpressionField, FieldMapping, LookupCondition,
                         Mapping, Transformation)
 
+#: Structural booleans worth reporting when ticked, with their designer label.
+#: Only the enabled state is recorded - an unticked box is the default.
+_OPTION_LABELS = {
+    "createTarget": "Create target at runtime",
+    "inputSorted": "Input is sorted",
+    "targetFieldsOrdered": "Target fields ordered",
+    "useLabels": "Use labels",
+    "useSequenceFields": "Use sequence fields",
+    "generateFilenamePort": "Generate filename port",
+}
+_READ_OPTION_LABELS = {
+    "selectDistinct": "Select distinct",
+    "queryAll": "Query all",
+    "descending": "Sort descending",
+}
+_WRITE_OPTION_LABELS = {
+    "truncate": "Truncate target",
+    "bulkApi": "Use bulk API",
+    "setFieldsToNull": "Set fields to null",
+    "useExactSrcNames": "Use exact source names",
+    "handleSpecialChars": "Handle special characters",
+    "handleDecimalRoundOff": "Handle decimal round-off",
+    "useErrorFile": "Write error file",
+    "useSuccessFile": "Write success file",
+}
+
 #: Informatica class-name fragment -> canonical transformation kind.
 _KIND_BY_CLASS = {
     "tmplsource.TmplSource": "Source",
@@ -182,9 +208,12 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
 
         write = adapter.get("writeOptions") or {}
         tx.write_operations = list(write.get("operations") or [])
-        tx.truncate_target = str(write.get("truncate", "")).lower() == "true"
+        tx.truncate_target = _is_on(write.get("truncate"))
 
-    # Pre/Post SQL and other advanced properties
+        tx.options.extend(_ticked(read, _READ_OPTION_LABELS))
+        tx.options.extend(_ticked(write, _WRITE_OPTION_LABELS))
+
+    # Pre/Post SQL, and any advanced option the designer shows as a checkbox.
     for prop in raw.get("advancedProperties") or []:
         pname, pvalue = prop.get("name", ""), prop.get("value", "")
         if not pvalue:
@@ -193,6 +222,11 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
             tx.pre_sql = pvalue
         elif pname == "Post SQL":
             tx.post_sql = pvalue
+        elif _is_on(pvalue):
+            tx.options.append(pname)
+
+    # Structural checkboxes that live on the transformation itself.
+    tx.options.extend(_ticked(raw, _OPTION_LABELS))
 
     # Expression fields
     for f in raw.get("fields") or []:
@@ -246,6 +280,16 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
         ]
 
     return tx
+
+
+def _is_on(value) -> bool:
+    """True for a ticked checkbox, however the export spells it."""
+    return str(value).strip().lower() == "true" or value is True
+
+
+def _ticked(source: dict, labels: Dict[str, str]) -> List[str]:
+    """The designer labels of every option in ``source`` that is switched on."""
+    return [label for key, label in labels.items() if _is_on(source.get(key))]
 
 
 def _field_mappings(raw: dict) -> List[FieldMapping]:
