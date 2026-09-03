@@ -44,14 +44,16 @@ class CoverageLine:
 
 def audit(integration: Integration,
           detail_rows: Sequence[Sequence[str]],
-          field_rows: Sequence[Sequence[str]]) -> List[CoverageLine]:
+          field_rows: Sequence[Sequence[str]],
+          object_rows: Sequence[Sequence[str]] = ()) -> List[CoverageLine]:
     """Compare what the package holds against what the sheets show."""
     detail_text = _text_of(detail_rows)
     field_text = _text_of(field_rows)
-    both = detail_text | field_text
+    object_text = _text_of(object_rows)
+    both = detail_text | field_text | object_text
     # Multi-word values (option labels) are never whole tokens, so they need a
     # substring check against the raw rendered text rather than the token set.
-    blob = _blob(detail_rows) + "\n" + _blob(field_rows)
+    blob = "\n".join((_blob(detail_rows), _blob(field_rows), _blob(object_rows)))
 
     lines: List[CoverageLine] = []
 
@@ -139,7 +141,18 @@ def audit(integration: Integration,
     lines.append(CoverageLine("Enabled options (checkboxes)", len(options),
                               len(options) - len(missing_options), missing_options))
 
-    # 10. Transformations that shape data but carry no condition of their own -
+    # 10. Source and target columns - the designer's Fields grids.
+    columns, missing_columns = [], []
+    for mapping in integration.mappings:
+        for tx in mapping.transformations:
+            for col in tx.fields:
+                columns.append(col.name)
+                if col.name not in object_text:
+                    missing_columns.append(f"{mapping.name} · {tx.name} · {col.name}")
+    lines.append(CoverageLine("Source/target columns", len(columns),
+                              len(columns) - len(missing_columns), missing_columns))
+
+    # 11. Transformations that shape data but carry no condition of their own -
     #    easy to lose, so confirm each is named somewhere.
     shaping, missing_shaping = [], []
     for mapping in integration.mappings:

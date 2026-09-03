@@ -18,7 +18,8 @@ from iics_parser.extract.package import ExportPackage
 from iics_parser.parse.build import build_integration
 from iics_parser.parse.mapping import flow_string
 from iics_parser.pipeline import process
-from iics_parser.render.rows import field_level_rows, mapping_detail_rows
+from iics_parser.render.rows import (field_level_rows, mapping_detail_rows,
+                                     object_field_rows)
 
 SAMPLE = (Path(__file__).resolve().parent.parent / "samples"
           / "tf_HUB_CONCUR_EMPLOYEE_DETAILS_OUTBOUND_FIN_I_HR001.zip")
@@ -344,7 +345,8 @@ def test_encryption_and_retention_detail_is_captured(integration):
 def test_coverage_is_complete_for_the_reference_package(integration):
     from iics_parser import coverage
     lines = coverage.audit(integration, mapping_detail_rows(integration),
-                           field_level_rows(integration))
+                           field_level_rows(integration),
+                           object_field_rows(integration))
     incomplete = [(l.category, l.summary, l.missing) for l in lines if not l.complete]
     assert not incomplete, f"objects missing from the output: {incomplete}"
     assert coverage.overall(lines)["percent"] == 100
@@ -355,11 +357,12 @@ def test_coverage_detects_dropped_rows(integration):
     from iics_parser import coverage
     detail = mapping_detail_rows(integration)
     fields = field_level_rows(integration)
+    objects = object_field_rows(integration)
 
-    lines = coverage.audit(integration, detail[:-5], fields)
+    lines = coverage.audit(integration, detail[:-5], fields, objects)
     assert any(l.category == "Taskflow steps" and not l.complete for l in lines)
 
-    lines = coverage.audit(integration, detail, fields[:-12])
+    lines = coverage.audit(integration, detail, fields[:-12], objects)
     assert any(not l.complete for l in lines)
 
 
@@ -373,7 +376,8 @@ def test_coverage_detects_a_broken_task_to_mapping_link(tmp_path):
     broken.task.mapping = None
 
     lines = coverage.audit(integration, mapping_detail_rows(integration),
-                           field_level_rows(integration))
+                           field_level_rows(integration),
+                           object_field_rows(integration))
     unreached = next(l for l in lines if l.category == "Mappings reached by a step")
     assert orphaned in unreached.missing
 
@@ -423,3 +427,52 @@ def test_ticked_options_reach_the_spreadsheet(integration):
     assert "Forward Rejected Rows" in text
     assert "Lookup caching enabled" in text
     assert "Cross-schema pushdown enabled" in text
+
+
+# ------------------------------------------- source / target field inventory
+
+def test_source_fields_match_the_designer_grid(integration):
+    """The Source Fields grid: name, type, precision, scale, origin."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_ERP_LND_CONCUR_STG_TRX_760_EMPLOYEE_OUTBOUND")
+    source = next(t for t in mapping.sources if t.name == "src_pm_endated_details")
+
+    assert [f.name for f in source.fields] == [
+        "PROJECT_NUMBER", "CARRYING_OUT_ORG_NAME", "CARRYING_OUT_ORG_ID",
+        "PROJECT_UNIT", "PM_PERSON_NUMBER", "PM_END_DATE",
+    ]
+    first = source.fields[0]
+    assert first.data_type == "string"
+    assert first.precision == 510 and first.scale == 0
+    assert first.native_type == "nvarchar"
+    assert first.origin == "LND_ERP_CONCUR_PM_ENDDATE_DATA"
+
+
+def test_target_fields_carry_their_mapped_incoming_field(integration):
+    """The Target Fields grid plus the Field Mapping tab's Mapped Field."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_ERP_LND_CONCUR_STG_TRX_760_EMPLOYEE_OUTBOUND")
+    target = next(t for t in mapping.targets
+                  if t.name == "tgt_MOR_EMPLOYEE_OUTBOUND_TRX_760")
+
+    assert len(target.fields) == 13
+    wired = {f.name: f.mapped_from for f in target.fields}
+    assert wired["TRX_TYPE"] == "o_trx_type"
+    assert wired["EMPLOYEE_ID"] == "PM_PERSON_NUMBER"
+    assert wired["SEGMENT_1"] == "PROJECT_UNIT"
+    assert wired["SEGMENT_3"] == "PROJECT_NUMBER"
+    # 6 of 13 mapped in the designer - the rest must read as unmapped.
+    assert sum(1 for v in wired.values() if v) == 6
+    assert wired["SEGMENT_4"] == ""
+
+
+def test_object_fields_reach_their_own_sheet(integration):
+    rows = object_field_rows(integration)
+    assert rows and all(len(r) == 14 for r in rows)
+
+    by_field = {(r[3] or "", r[5]): r for r in rows}
+    src = next(r for k, r in by_field.items() if k[1] == "PM_END_DATE")
+    assert src[6] == "string" and src[7] == "510"
+
+    tgt = next(r for k, r in by_field.items() if k[1] == "SEGMENT_2")
+    assert tgt[13] == "CARRYING_OUT_ORG_ID"      # Mapped From

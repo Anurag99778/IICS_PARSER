@@ -26,8 +26,10 @@ from ..model.ir import Integration
 from .rows import (
     FIELD_LEVEL_COLUMNS,
     MAPPING_DETAIL_COLUMNS,
+    OBJECT_FIELD_COLUMNS,
     field_level_rows,
     mapping_detail_rows,
+    object_field_rows,
 )
 
 _TITLE_FONT = Font(bold=True, size=13)
@@ -78,6 +80,7 @@ def clean_cell(value: object) -> Tuple[Optional[str], Optional[str]]:
 _WIDTHS = {
     "Mapping Details": [7, 26, 18, 38, 38, 18, 40, 34, 26, 32, 40, 26, 32, 44, 40],
     "Field level mapping": [7, 26, 18, 38, 38, 20, 52, 34, 28],
+    "Source & Target Fields": [7, 26, 40, 32, 12, 28, 12, 10, 8, 13, 9, 6, 32, 26],
 }
 
 
@@ -97,7 +100,10 @@ def write_workbook(integration: Integration, path: Path) -> Path:
     fields = field_level_rows(integration)
     _sheet(wb, "Mapping Details", title, MAPPING_DETAIL_COLUMNS, detail, notes)
     _sheet(wb, "Field level mapping", title, FIELD_LEVEL_COLUMNS, fields, notes)
-    _report_sheet(wb, integration, notes, coverage.audit(integration, detail, fields))
+    objects = object_field_rows(integration)
+    _sheet(wb, "Source & Target Fields", title, OBJECT_FIELD_COLUMNS, objects, notes)
+    _report_sheet(wb, integration, notes,
+                  coverage.audit(integration, detail, fields, objects))
 
     wb.save(path)
     return path

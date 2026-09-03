@@ -3,8 +3,8 @@
 Turns an Informatica IICS export package (`.zip`) into the analysis documents
 used for the Oracle Integration Cloud migration:
 
-* **`<taskflow>_Analysis.xlsx`** — *Mapping Details* and *Field level mapping*
-  sheets, plus a *Parse Report* sheet listing anything needing review
+* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field level mapping* and
+  *Source & Target Fields* sheets, plus a *Parse Report* with a coverage table
 * **`<taskflow>_Analysis.docx`** — the process document, built on your own
   template, with the mapping diagrams embedded automatically
 
@@ -60,6 +60,8 @@ Almost everything. The export package is far more structured than it looks:
 | Source/target connections and objects | mapping graph `dataAdapter` → `cn_*.Connection` |
 | Expressions, variables | Expression transformation fields |
 | **Column lineage** (`o_proj_unit → SEGMENT_1`) | target `manualMappings` |
+| **Source/target field grids** (name, type, precision, scale, origin) | `dataAdapter.object.fields` |
+| Ticked designer checkboxes | `advancedProperties`, read/write options |
 | Lookups, filters, router conditions | `lookupConditions`, `readOptions`, group conditions |
 | Pre/Post SQL, write operations | target `advancedProperties` / `writeOptions` |
 | Flow strings (`src->exp->tgt`) | walking the mapping `links` |
@@ -154,7 +156,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 57 tests
+python -m pytest        # 65 tests
 ```
 
 ## Requirements

@@ -26,6 +26,14 @@ FIELD_LEVEL_COLUMNS = [
     "Input fields", "Values", "Path", "Notes",
 ]
 
+#: The designer's Source Fields / Target Fields grids, plus the Field Mapping
+#: tab's "Mapped Field" column, in one place.
+OBJECT_FIELD_COLUMNS = [
+    "S. No", "Taskflow", "Mapping Name", "Transformation", "Side",
+    "Field Name", "Type", "Precision", "Scale", "Native Type",
+    "Nullable", "Key", "Origin", "Mapped From",
+]
+
 
 @dataclass
 class ObjectPair:
@@ -347,6 +355,47 @@ def field_level_rows(integration: Integration) -> List[List[str]]:
                 step.mapping_name if i == 0 else "",
                 name, value, path, note,
             ])
+    return rows
+
+
+def object_field_rows(integration: Integration) -> List[List[str]]:
+    """Rows for the 'Source & Target Fields' sheet.
+
+    One row per column of every source, target and lookup object - the same
+    grid the IICS designer shows under Source Fields / Target Fields, with the
+    incoming field each target column is wired to.
+    """
+    rows: List[List[str]] = []
+    seen_mappings = set()
+
+    for step in integration.steps:
+        mapping = step.task.mapping if step.task and step.task.mapping else None
+        if not mapping or mapping.name in seen_mappings:
+            continue
+        seen_mappings.add(mapping.name)
+
+        first_of_mapping = True
+        for tx in mapping.transformations:
+            if not tx.fields:
+                continue
+            for i, f in enumerate(tx.fields):
+                rows.append([
+                    step.seq if first_of_mapping else "",
+                    step.title if first_of_mapping else "",
+                    mapping.name if first_of_mapping else "",
+                    tx.name if i == 0 else "",
+                    tx.kind if i == 0 else "",
+                    f.name,
+                    f.data_type,
+                    "" if f.precision is None else str(f.precision),
+                    "" if f.scale is None else str(f.scale),
+                    f.native_type,
+                    "Yes" if f.nullable else "No",
+                    "Yes" if f.is_key else "",
+                    f.origin,
+                    f.mapped_from,
+                ])
+                first_of_mapping = False
     return rows
 
 

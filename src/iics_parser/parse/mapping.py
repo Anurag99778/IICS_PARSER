@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..extract.package import Asset
 from ..model.ir import (Connection, ExpressionField, FieldMapping, LookupCondition,
-                        Mapping, Transformation)
+                        Mapping, Transformation, TransformationField)
 
 #: Structural booleans worth reporting when ticked, with their designer label.
 #: Only the enabled state is recorded - an unticked box is the default.
@@ -198,6 +198,7 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
         tx.object_name = obj.get("objectName") or obj.get("name") or ""
         tx.custom_query = obj.get("customQuery", "") or ""
         tx.field_count = len(obj.get("fields") or [])
+        tx.fields = _object_fields(obj, raw)
 
         read = adapter.get("readOptions") or {}
         tx.filter_condition = read.get("filterCondition", "") or ""
@@ -272,6 +273,9 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
 
     # Column-level lineage: which incoming field feeds which target column.
     tx.field_mappings = _field_mappings(raw)
+    wired = {fm.to_field: fm.from_field for fm in tx.field_mappings}
+    for column in tx.fields:
+        column.mapped_from = wired.get(column.name, "")
 
     if not tx.update_columns:
         tx.update_columns = [
@@ -280,6 +284,48 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
         ]
 
     return tx
+
+
+def _object_fields(obj: dict, raw: dict) -> List[TransformationField]:
+    """The Fields grid of a source or target.
+
+    Column detail is split across two places: the adapter field carries
+    precision, scale, the native database type and the originating object; the
+    transformation field carries the platform type the designer displays. They
+    are joined by name.
+    """
+    platform_types = {
+        f.get("name"): _type_name(f.get("platformType"))
+        for f in (raw.get("fields") or []) if f.get("name")
+    }
+
+    out: List[TransformationField] = []
+    for f in obj.get("fields") or []:
+        name = f.get("name") or f.get("nativeName") or ""
+        if not name:
+            continue
+        origin = ""
+        for prop in f.get("properties") or []:
+            if prop.get("name") == "parentObject":
+                origin = prop.get("value", "") or ""
+        out.append(TransformationField(
+            name=name,
+            data_type=platform_types.get(name, ""),
+            precision=_as_int(f.get("precision")),
+            scale=_as_int(f.get("scale")),
+            native_type=f.get("nativeType", "") or "",
+            nullable=_is_on(f.get("nullable")),
+            is_key=_is_on(f.get("key")),
+            origin=origin or obj.get("objectName", "") or "",
+        ))
+    return out
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_on(value) -> bool:

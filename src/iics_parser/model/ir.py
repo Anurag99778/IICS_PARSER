@@ -52,6 +52,22 @@ class ExpressionField:
 
 
 @dataclass
+class TransformationField:
+    """One column of a source or target object, as the designer's Fields grid
+    shows it: name, type, precision, scale and the object it originates from."""
+
+    name: str
+    data_type: str = ""          # platform type - "string", "date/time", ...
+    precision: Optional[int] = None
+    scale: Optional[int] = None
+    native_type: str = ""        # the database type, e.g. nvarchar
+    nullable: bool = True
+    is_key: bool = False
+    origin: str = ""             # the object this column comes from
+    mapped_from: str = ""        # for targets: the incoming field wired to it
+
+
+@dataclass
 class FieldMapping:
     """One incoming field wired to one target column.
 
@@ -106,6 +122,7 @@ class Transformation:
     truncate_target: bool = False
     update_columns: List[str] = field(default_factory=list)
     field_count: int = 0
+    fields: List[TransformationField] = field(default_factory=list)
     field_mappings: List[FieldMapping] = field(default_factory=list)
     #: Options ticked in the IICS designer, e.g. "Forward Rejected Rows".
     #: Only enabled ones are kept - an unticked box is the default and would
