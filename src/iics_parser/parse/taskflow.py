@@ -55,7 +55,15 @@ _INTERESTING_PARAMS = {
     "Script Name": "Script File Name",
     "Input Arguments": "Input Arguments",
     "Work Directory": "Work Directory",
+    # Names the secure agent the step runs on - which host has to exist, and
+    # what has to be stood up on the OIC side.
+    "Runtime Environment": "Runtime Environment",
+    "Max Wait": "Max Wait (seconds)",
 }
+
+#: IICS's own default step timeout (7 days). Reporting it on every step would
+#: bury the steps where someone deliberately set something else.
+_DEFAULT_MAX_WAIT = "604800"
 
 _NS = {"types1": "http://schemas.active-endpoints.com/appmodules/repository/2010/10/avrepository.xsd"}
 
@@ -64,9 +72,20 @@ _NS = {"types1": "http://schemas.active-endpoints.com/appmodules/repository/2010
 #: record for an error path.
 _THROW_PARAMS = {"code": "Code", "reason": "Reason", "detail": "Detail"}
 
+#: How the taskflow spells the comparison operators used in branch conditions.
+#: Anything absent falls back to the raw function name, so an operator this
+#: parser has not seen still reads sensibly instead of vanishing.
+_CONDITION_OPERATORS = {
+    "greater-than": ">", "greater-than-or-equal": ">=",
+    "less-than": "<", "less-than-or-equal": "<=",
+    "equals": "=", "equal": "=", "not-equals": "!=", "not-equal": "!=",
+    "contains": "contains", "starts-with": "starts with",
+    "ends-with": "ends with", "matches": "matches",
+}
+
 #: Elements that can appear as a node in the flow graph.
 _NODES = {"eventContainer", "container", "assignment", "decision", "flow",
-          "start", "end", "service", "throw"}
+          "start", "end", "service", "throw", "jumpTo"}
 
 
 def parse_taskflow(path: Path, warnings: Optional[List[str]] = None):
@@ -218,15 +237,19 @@ class _Graph:
                 return link.get("targetId")
         return None
 
-    def branch_targets(self, node: ET.Element) -> List[Tuple[str, bool]]:
-        """Container/event branch targets as ``(target_id, is_error)``."""
+    def branch_targets(self, node: ET.Element) -> List[Tuple[str, bool, str]]:
+        """Branch targets as ``(target_id, is_error, condition)``.
+
+        The condition is what decides whether an exclusive container takes this
+        branch; it is empty on a parallel branch and on the fall-through one.
+        """
         out = []
         for link, in_events in self._links(node):
             if link.get("type") == "containerLink":
                 target = link.get("targetId")
                 # A branch links back to its own container - not a child.
                 if target and target != node.get("id"):
-                    out.append((target, in_events))
+                    out.append((target, in_events, _condition_text(link)))
         return out
 
     # -- traversal -------------------------------------------------------
@@ -251,14 +274,31 @@ class _Graph:
             tag = _tag(node)
 
             if tag == "container":
-                # Parallel/exclusive paths are concurrent: every branch is a
-                # dotted sub-step of the container's own number.
-                number = counter.next()
+                # An *exclusive* container is a decision: exactly one branch
+                # runs, chosen by a condition. Rendering it like a parallel
+                # container would tell a reader both branches always happen,
+                # which is the opposite of the truth - so it gets its own step
+                # carrying the conditions, and its branches are labelled by
+                # them rather than by "path 1 / path 2".
+                branches = self.branch_targets(node)
+                exclusive = node.get("type") == "exclusive"
                 label = _title(node)
-                for i, (target, _) in enumerate(self.branch_targets(node), start=1):
+                number = counter.next()
+
+                if exclusive:
+                    step = Step(seq=number, title=label or "Decision",
+                                step_type="Decision", branch=branch, depth=depth,
+                                parameters=_branch_conditions(branches))
+                    steps.append(step)
+
+                for i, (target, _, condition) in enumerate(branches, start=1):
+                    if exclusive:
+                        outcome = condition or "otherwise"
+                    else:
+                        outcome = f"path {i}"
                     self.walk_chain(
                         target, steps,
-                        branch=f"{label} / path {i}" if label else f"path {i}",
+                        branch=f"{label} / {outcome}" if label else outcome,
                         counter=_BranchCounter(number, i),
                         depth=depth + 1,
                     )
@@ -273,6 +313,11 @@ class _Graph:
                 node_id = self.sequence_target(node)
                 continue
 
+            if tag == "jumpTo":
+                # Not a step of its own - it hands control to another node.
+                node_id = self.sequence_target(node)
+                continue
+
             step = self.make_step(node, branch, depth)
             if not step:
                 node_id = self.sequence_target(node)
@@ -282,8 +327,8 @@ class _Graph:
             steps.append(step)
 
             branches = self.branch_targets(node)
-            errors = [t for t, is_err in branches if is_err]
-            normals = [t for t, is_err in branches if not is_err]
+            errors = [t for t, is_err, _ in branches if is_err]
+            normals = [t for t, is_err, _ in branches if not is_err]
 
             # If the step has no onward sequence link, its normal branch *is*
             # the main chain (an on-success branch), so it keeps the top-level
@@ -393,6 +438,8 @@ def _parse_service(el: ET.Element, branch: str, depth: int, on_error: str) -> St
 
         if pname in _INTERESTING_PARAMS:
             value = _param_value(param)
+            if pname == "Max Wait" and value == _DEFAULT_MAX_WAIT:
+                continue
             if value:
                 step.parameters.append(
                     TaskParameter(name=_INTERESTING_PARAMS[pname], value=value,
@@ -454,6 +501,46 @@ def _parse_throw(el: ET.Element, branch: str, depth: int) -> Step:
                 TaskParameter(name=label, value=value, source=param.get("source", ""))
             )
     return step
+
+
+def _condition_text(link: ET.Element) -> str:
+    """Read a branch condition into something a person can check.
+
+    ``greater-than(left={...p_in_supplier_count}, right={0})`` becomes
+    ``$temp...p_in_supplier_count > 0``.
+    """
+    condition = _child(link, "condition")
+    if condition is None:
+        return ""
+    function = _child(condition, "function")
+    if function is None:
+        return _normalise(condition.text or "")
+
+    name = function.get("name", "")
+    operator = _CONDITION_OPERATORS.get(name, name)
+    args = [_unwrap(arg.text) for arg in function if _tag(arg) == "arg"]
+    if len(args) == 2:
+        return f"{args[0]} {operator} {args[1]}"
+    return f"{operator}({', '.join(args)})" if args else operator
+
+
+def _unwrap(text: Optional[str]) -> str:
+    """Strip the ``{...}`` the taskflow wraps every expression argument in."""
+    value = _normalise(text or "")
+    if value.startswith("{") and value.endswith("}"):
+        value = value[1:-1].strip()
+    return value
+
+
+def _branch_conditions(branches: List[Tuple[str, bool, str]]) -> List[TaskParameter]:
+    """One parameter per outcome of a decision, in branch order."""
+    out = []
+    for target, _, condition in branches:
+        if condition:
+            out.append(TaskParameter(name="Condition", value=condition))
+        else:
+            out.append(TaskParameter(name="Otherwise", value="continue"))
+    return out
 
 
 def _decision_params(el: ET.Element) -> List[TaskParameter]:

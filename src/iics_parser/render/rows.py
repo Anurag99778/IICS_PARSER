@@ -220,7 +220,7 @@ def _object_label(tx: Transformation) -> str:
     """
     if tx.custom_query:
         return f"Query: {tx.custom_query}"
-    name = tx.object_name or tx.name
+    name = tx.object_path or tx.object_name or tx.name
     if tx.db_schema and name:
         name = f"{tx.db_schema}.{name}"
     if tx.dynamic_file_name:
@@ -257,6 +257,10 @@ def _lookup_filter_note(mapping: Mapping) -> str:
             detail.append(f"Connection: {lkp.connection_display}")
         if lkp.object_name:
             detail.append(f"Lookup Object: {lkp.object_name}")
+        # A lookup can override its object with SQL of its own, and then the
+        # object name alone is misleading about what is actually read.
+        if lkp.custom_query:
+            detail.append(f"Lookup SQL Override: {lkp.custom_query}")
         if lkp.lookup_conditions:
             detail.append("Condition: " + " AND ".join(str(c) for c in lkp.lookup_conditions))
         if lkp.lookup_return_field:

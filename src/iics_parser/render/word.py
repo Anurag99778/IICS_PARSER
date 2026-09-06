@@ -265,8 +265,8 @@ def _downstream_rows(integration: Integration) -> List[List[str]]:
 
 
 def _qualified(tx) -> str:
-    """``STAGING1.MOR_EMPLOYEES`` - the object, qualified by its schema."""
-    name = tx.object_name
+    """``STAGING1.MOR_EMPLOYEES`` - the object, qualified by schema or folder."""
+    name = tx.object_path or tx.object_name
     if name and tx.db_schema:
         return f"{tx.db_schema}.{name}"
     return name

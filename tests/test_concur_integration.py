@@ -516,9 +516,11 @@ def test_sort_keys_carry_their_direction(integration):
         "SEGMENT_2 (Ascending)", "SEGMENT_3 (Ascending)",
     ]
 
+    # A source's sort key is qualified by its object - two objects in one
+    # mapping can carry the same column name.
     source = next(t for m in integration.mappings for t in m.sources
                   if t.name == "src_LND_LKP_PROJECTS_TOPIC")
-    assert source.sort_fields == ["PROJECT_NUMBER (Ascending)"]
+    assert source.sort_fields == ["LND_LKP_PROJECTS_TOPIC.PROJECT_NUMBER (Ascending)"]
 
 
 def test_aggregator_group_by_fields_are_captured(integration):
@@ -558,3 +560,83 @@ def test_file_operation_detail_reaches_the_sheet(integration):
     blob = "\n".join(str(cell) for r in rows for cell in r)
     assert "_CONCUR_EMP_OUTBOUND" in blob
     assert "Wildcard: *.zip" in blob
+
+
+def test_exclusive_container_is_a_decision_not_a_parallel_path(integration):
+    """Only one branch of an exclusive container runs.
+
+    Rendering it like a parallel container would tell a reader that both
+    branches always happen - the opposite of the truth.
+    """
+    decision = next(s for s in integration.steps if s.step_type == "Decision")
+    assert decision.title == "dsc_check_supp_errors"
+
+    outcomes = [(p.name, p.value) for p in decision.parameters]
+    assert ("Condition",
+            "$temp.SupplierErrorLog[1]/inout[1]/p_in_supplier_count > 0") in outcomes
+    assert ("Otherwise", "continue") in outcomes
+
+    # Its branches are labelled by outcome, never "path 1 / path 2".
+    branches = [s.branch for s in integration.steps
+                if s.branch.startswith("dsc_check_supp_errors")]
+    assert branches and not any("path " in b for b in branches)
+    assert any("> 0" in b for b in branches)
+
+
+def test_parallel_containers_stay_parallel(integration):
+    """The distinction only means something if the other case still holds."""
+    parallel = [s.branch for s in integration.steps
+                if s.branch.startswith("Parallel Paths")]
+    assert any("path 1" in b for b in parallel)
+    assert any("path 2" in b for b in parallel)
+    assert not any(s.step_type == "Decision" and s.title.startswith("Parallel")
+                   for s in integration.steps)
+
+
+def test_lookup_sql_override_is_reported(integration):
+    """The object name alone misleads when SQL overrides what is read."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_STG_ERP_DELETE_PROCESSED_RECORDS_FROM_EMPLOYEE_ERROR_LOG")
+    lookup = next(t for t in mapping.lookups if t.custom_query)
+
+    rows = mapping_detail_rows(integration)
+    blob = "\n".join(str(cell) for r in rows for cell in r)
+    assert "Lookup SQL Override:" in blob
+    assert lookup.custom_query.splitlines()[0] in blob
+
+
+def test_file_source_keeps_its_folder(integration):
+    """For a file source the folder is half the answer."""
+    source = next(t for m in integration.mappings for t in m.sources
+                  if t.name == "src_ERP_ESS_CONCUR_PM_FILE_LIST")
+    assert source.object_path == (
+        "Concur_Employee_Outbound_Details/Input/"
+        "CONCUR__PM_END_DATED_DETAILS_LIST.txt"
+    )
+    blob = "\n".join(str(c) for r in mapping_detail_rows(integration) for c in r)
+    assert source.object_path in blob
+
+
+def test_runtime_environment_reaches_the_output(integration):
+    """Which secure agent a step runs on is a migration fact."""
+    blob = "\n".join(str(c) for r in mapping_detail_rows(integration) for c in r)
+    assert "NWAPPINFMTC02" in blob
+    # IICS's 7-day default timeout is not worth a row on every step.
+    assert "604800" not in blob
+
+
+def test_router_and_filter_conditions_are_captured(integration):
+    """Which rows reach which target is the whole point of a Router."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_ERP_LND_CONCUR_STG_TRX_760_EMPLOYEE_OUTBOUND")
+    router = next(t for t in mapping.transformations if t.kind == "Router")
+    assert "TRX760_FLOW: o_future_flag = N" in router.group_expressions
+    assert "FUTURE_FLOW: o_future_flag = Y" in router.group_expressions
+
+    other = next(m for m in integration.mappings
+                 if m.name == "m_STG_ERP_DELETE_PROCESSED_RECORDS_FROM_EMPLOYEE_ERROR_LOG")
+    filt = next(t for t in other.transformations if t.kind == "Filter")
+    assert filt.group_expressions == ["O_FLAG = Y"]
+
+    blob = "\n".join(str(c) for r in mapping_detail_rows(integration) for c in r)
+    assert "o_future_flag = Y" in blob and "O_FLAG = Y" in blob

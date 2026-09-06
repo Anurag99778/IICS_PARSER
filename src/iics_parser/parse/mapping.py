@@ -196,6 +196,10 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
 
         obj = adapter.get("object") or {}
         tx.object_name = obj.get("objectName") or obj.get("name") or ""
+        # For a file source the folder is half the answer, and it is only ever
+        # in `path`. Kept only when it says more than the name already does.
+        path = obj.get("path", "") or ""
+        tx.object_path = path if path and path != tx.object_name else ""
         tx.db_schema = obj.get("dbSchema", "") or ""
         tx.custom_query = obj.get("customQuery", "") or ""
         tx.field_count = len(obj.get("fields") or [])
@@ -211,7 +215,8 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
         # A source's read-time ordering. Direction matters as much as the key -
         # a report sorted the wrong way is wrong.
         tx.sort_fields = [
-            _sort_key(s.get("fieldName"), _is_on(s.get("sortDescending")))
+            _sort_key(s.get("fieldName"), _is_on(s.get("sortDescending")),
+                      s.get("objectName"))
             for s in (read.get("sortFields") or []) if s.get("fieldName")
         ]
 
@@ -288,14 +293,7 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
         tx.lookup_return_field = raw.get("returnPortName", "") or ""
         tx.lookup_multiple_match = raw.get("multipleMatchPolicy", "") or ""
 
-    # Router / Filter group conditions
-    for group in raw.get("groups") or []:
-        cond = group.get("filterCondition") or group.get("condition")
-        if cond:
-            label = group.get("name", "")
-            tx.group_expressions.append(f"{label}: {cond}" if label else str(cond))
-    if kind == "Filter" and raw.get("filterCondition"):
-        tx.group_expressions.append(str(raw["filterCondition"]))
+    tx.group_expressions.extend(_conditions(raw))
 
     # Column-level lineage: which incoming field feeds which target column.
     tx.field_mappings = _field_mappings(raw)
@@ -347,9 +345,57 @@ def _object_fields(obj: dict, raw: dict) -> List[TransformationField]:
     return out
 
 
-def _sort_key(name, descending: bool) -> str:
-    """``EMPLOYEE_ID (Ascending)`` - how the designer labels a sort key."""
-    return f"{name} ({'Descending' if descending else 'Ascending'})"
+def _conditions(raw: dict) -> List[str]:
+    """Every routing or filtering rule on a transformation.
+
+    A Filter or Router states its rules in one of three ways and the export
+    picks whichever the designer used, so all three are read: a plain condition
+    string, a list of ``field op value`` triples, or - on a Router - one such
+    list per output group, which is what decides which rows reach which target.
+    """
+    out: List[str] = []
+
+    simple = _simple_conditions(raw.get("filterConditions"))
+    if simple:
+        out.append(simple)
+
+    for group in raw.get("groupFilterConditions") or []:
+        name = group.get("name", "")
+        rule = (_simple_conditions(group.get("simpleFilterConditions"))
+                or group.get("advancedFilterCondition", ""))
+        if rule:
+            out.append(f"{name}: {rule}" if name else rule)
+
+    for group in raw.get("groups") or []:
+        rule = group.get("filterCondition") or group.get("condition")
+        if rule:
+            name = group.get("name", "")
+            out.append(f"{name}: {rule}" if name else str(rule))
+
+    plain = raw.get("filterCondition")
+    if plain and isinstance(plain, str):
+        out.append(plain)
+
+    return out
+
+
+def _simple_conditions(entries) -> str:
+    """``o_future_flag = N`` - the designer's field/operator/value rows."""
+    parts = [
+        f"{e.get('fieldName', '')} {e.get('operator', '=')} {e.get('filterValue', '')}".strip()
+        for e in (entries or []) if e.get("fieldName")
+    ]
+    return " AND ".join(parts)
+
+
+def _sort_key(name, descending: bool, obj=None) -> str:
+    """``LND_LKP_PROJECTS.PROJECT_NUMBER (Ascending)``.
+
+    Qualified by its object where the export names one, because two objects in
+    a mapping can carry the same column name.
+    """
+    label = f"{obj}.{name}" if obj else str(name)
+    return f"{label} ({'Descending' if descending else 'Ascending'})"
 
 
 def _positive(value) -> str:

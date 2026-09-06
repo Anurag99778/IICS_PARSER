@@ -117,6 +117,9 @@ class Transformation:
     connection_name: str = ""
     connection_type: str = ""
     object_name: str = ""
+    #: Where the object lives when that is not implied by the connection - a
+    #: file's folder, say. Empty when it would only repeat ``object_name``.
+    object_path: str = ""
     db_schema: str = ""
     custom_query: str = ""
     filter_condition: str = ""

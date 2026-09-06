@@ -56,6 +56,8 @@ Almost everything. The export package is far more structured than it looks:
 |---|---|
 | Step order, names, types | `tf_*.TASKFLOW.xml` — **the link graph**, not document order |
 | Error paths and the faults they raise | taskflow `<catch>` and `<throw>` (code, reason) |
+| **Decisions vs parallel paths**, with the branch conditions | container `type` + branch `<condition>` |
+| Runtime environment (secure agent) per step | taskflow `serviceInput` |
 | Sub-task / mapping names | taskflow parameters → `mtTask.json` → `mappingId` |
 | In-out parameters, parameter file | `mct_*.MTT/mtTask.json` |
 | Source/target connections and objects | mapping graph `dataAdapter` → `cn_*.Connection` |
@@ -64,7 +66,7 @@ Almost everything. The export package is far more structured than it looks:
 | **Source/target field grids** (name, type, precision, scale, origin) | `dataAdapter.object.fields` |
 | **Sort keys with direction, aggregator group-by keys** | `sortEntries`, `sortFields`, `groupByFieldsList` |
 | Ticked designer checkboxes | `advancedProperties`, read/write options |
-| Lookups, filters, router conditions | `lookupConditions`, `readOptions`, group conditions |
+| Lookups (incl. SQL overrides), filter and **router group conditions** | `lookupConditions`, `filterConditions`, `groupFilterConditions` |
 | Pre/Post SQL, write operations, update strategy | target `advancedProperties` / `writeOptions` |
 | Schema-qualified objects, flat-file layout | `object.dbSchema`, `object.fileAttrs` |
 | Flow strings (`src->exp->tgt`) | walking the mapping `links` |
@@ -133,7 +135,7 @@ category of object found in the package, how many reached the output.
 
 ```
 Coverage                      100% of objects found in the package appear here
-  Taskflow steps              23/23 — complete
+  Taskflow steps              24/24 — complete
   Mappings reached by a step   9/9 — complete
   Target column mappings      33/33 — complete
   Source/target columns      686/686 — complete
@@ -162,7 +164,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 72 tests
+python -m pytest        # 78 tests
 ```
 
 ## Requirements
