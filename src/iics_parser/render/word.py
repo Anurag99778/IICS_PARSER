@@ -111,13 +111,13 @@ def _build(doc: Document, integration: Integration, meta) -> None:
 
     doc.add_heading("Upstream Dependency", level=3)
     _grid(doc,
-          ["#", "Source Asset", "Connection / Protocol",
+          ["#", "Task Name", "Source Asset", "Connection / Protocol",
            "Source Object / File / API", "Dependency Type", "Notes"],
           _upstream_rows(integration))
 
     doc.add_heading("Down Stream Dependency", level=3)
     _grid(doc,
-          ["#", "Task Name", "Connection / Protocol",
+          ["#", "Target System / Application", "Task Name", "Connection / Protocol",
            "Target Object / File / API", "Dependency Type", "Notes / Description"],
           _downstream_rows(integration))
 
@@ -129,7 +129,8 @@ def _build(doc: Document, integration: Integration, meta) -> None:
 
     doc.add_heading("Connections and Security", level=3)
     _grid(doc,
-          ["Connection", "Type", "Host / Endpoint", "Database / Path", "Used by"],
+          ["Connection", "Type", "Host / Endpoint", "Database / Path",
+           "Schema / User", "Used by"],
           _connection_rows(integration))
 
     doc.add_heading("Schedule and Trigger", level=3)
@@ -162,6 +163,12 @@ def _build(doc: Document, integration: Integration, meta) -> None:
 # --------------------------------------------------------------- row builders
 
 def _upstream_rows(integration: Integration) -> List[List[str]]:
+    """One row per thing this integration reads from.
+
+    ``Source Asset`` is the asset the read happens through - the mapping for a
+    mapping task, the connection for a file transfer - which is distinct from
+    the task that runs it.
+    """
     rows: List[List[str]] = []
     for task in _ordered_tasks(integration):
         if task.task_type == "MI_TASK":
@@ -174,27 +181,40 @@ def _upstream_rows(integration: Integration) -> List[List[str]]:
             obj = []
             if src.directory:
                 obj.append(f"Source Directory: {src.directory}")
-            if src.file_pattern:
-                obj.append(f"File Pattern: {src.file_pattern}")
-            rows.append([str(len(rows) + 1), task.name, "\n".join(protocol),
-                         "\n".join(obj), "File", task.description or "-"])
+            if src.pattern_label:
+                obj.append(f"File Pattern: {src.pattern_label}")
+            notes = [task.description] if task.description else []
+            if src.after_pickup:
+                notes.append(f"Source file after pickup: {src.after_pickup}")
+            rows.append([str(len(rows) + 1), task.name,
+                         src.connection_name or "Mass Ingestion",
+                         "\n".join(protocol), "\n".join(obj), "File",
+                         "\n".join(notes) or "-"])
             continue
 
         mapping = task.mapping
         if not mapping:
             continue
         for source in mapping.sources:
-            obj = f"Query: {source.custom_query}" if source.custom_query else source.object_name
-            rows.append([str(len(rows) + 1), task.name, source.connection_display,
-                         obj or source.name, "Source", task.description or "-"])
+            obj = (f"Query: {source.custom_query}" if source.custom_query
+                   else _qualified(source))
+            rows.append([str(len(rows) + 1), task.name, mapping.name,
+                         source.connection_display, obj or source.name,
+                         "Source", task.description or "-"])
         for lookup in mapping.lookups:
-            rows.append([str(len(rows) + 1), task.name, lookup.connection_display,
-                         lookup.object_name or lookup.name, "Lookup",
+            rows.append([str(len(rows) + 1), task.name, mapping.name,
+                         lookup.connection_display, _qualified(lookup) or lookup.name,
+                         "Lookup",
                          "Unconnected lookup" if lookup.lookup_unconnected else "Lookup"])
-    return rows or [["1", PLACEHOLDER, "", "", "", ""]]
+    return rows or [["1", PLACEHOLDER, "", "", "", "", ""]]
 
 
 def _downstream_rows(integration: Integration) -> List[List[str]]:
+    """One row per thing this integration writes to.
+
+    ``Target System / Application`` is the platform on the receiving end - the
+    connection type, which is what a migration plan is organised around.
+    """
     rows: List[List[str]] = []
     for task in _ordered_tasks(integration):
         if task.task_type == "MI_TASK":
@@ -208,13 +228,13 @@ def _downstream_rows(integration: Integration) -> List[List[str]]:
                 protocol.append(f"Connection: {tgt.connection_name}")
             notes = [task.description] if task.description else []
             if tgt.actions:
-                notes.append("Action: " + ", ".join(tgt.actions))
-            if tgt.action_detail:
-                notes.append(tgt.action_detail)
+                notes.append("File operations: " + ", ".join(tgt.actions))
+            notes.extend(tgt.action_properties)
             rows.append([
-                str(len(rows) + 1), task.name, "\n".join(protocol),
+                str(len(rows) + 1), tgt.connection_type or "File", task.name,
+                "\n".join(protocol),
                 f"Target Directory: {tgt.directory}" if tgt.directory else "",
-                f"If file exists: {tgt.file_exists_action}" if tgt.file_exists_action else "",
+                f"If file exists: {tgt.file_exists_action}" if tgt.file_exists_action else "File",
                 "\n".join(notes) or "-",
             ])
             continue
@@ -226,18 +246,30 @@ def _downstream_rows(integration: Integration) -> List[List[str]]:
             notes = [task.description] if task.description else []
             if target.write_operations:
                 notes.append("Operation: " + ", ".join(target.write_operations))
+            if target.update_strategy:
+                notes.append(f"Update Strategy: {target.update_strategy}")
             if target.pre_sql:
                 notes.append(f"Pre SQL: {target.pre_sql}")
             if target.post_sql:
                 notes.append(f"Post SQL: {target.post_sql}")
+            if target.file_format:
+                notes.append(f"File format: {target.file_format}")
             if target.options:
                 notes.append("Options: " + ", ".join(target.options))
             rows.append([
-                str(len(rows) + 1), task.name, target.connection_display,
-                target.object_name or target.name,
+                str(len(rows) + 1), target.connection_type or "-", task.name,
+                target.connection_display, _qualified(target) or target.name,
                 "Target", "\n".join(notes) or "-",
             ])
-    return rows or [["1", PLACEHOLDER, "", "", "", ""]]
+    return rows or [["1", PLACEHOLDER, "", "", "", "", ""]]
+
+
+def _qualified(tx) -> str:
+    """``STAGING1.MOR_EMPLOYEES`` - the object, qualified by its schema."""
+    name = tx.object_name
+    if name and tx.db_schema:
+        return f"{tx.db_schema}.{name}"
+    return name
 
 
 def _connection_rows(integration: Integration) -> List[List[str]]:
@@ -255,9 +287,10 @@ def _connection_rows(integration: Integration) -> List[List[str]]:
     for conn in integration.connections:
         rows.append([
             conn.name, conn.conn_type, conn.host or "-", conn.database or "-",
+            conn.schema_label or "-",
             "\n".join(sorted(usage.get(conn.name, []))) or "-",
         ])
-    return rows or [[PLACEHOLDER, "", "", "", ""]]
+    return rows or [[PLACEHOLDER, "", "", "", "", ""]]
 
 
 def _ordered_tasks(integration: Integration) -> List[Task]:
@@ -326,7 +359,8 @@ def _parameter_section(doc: Document, integration: Integration) -> None:
             found = True
             _para(doc, f"{step.title}: {task.name}", bold=True)
             if task.parameter_file:
-                _para(doc, f"Parameter file: {task.parameter_file}", bullet=True)
+                _para(doc, "Parameter File Name")
+                _para(doc, task.parameter_file)
             for p in task.in_out_parameters:
                 _para(doc, f"{p.name} = {p.value}", bullet=True)
         if step.step_type == "Assignment" and step.parameters:

@@ -55,17 +55,21 @@ Almost everything. The export package is far more structured than it looks:
 | Output | Comes from |
 |---|---|
 | Step order, names, types | `tf_*.TASKFLOW.xml` — **the link graph**, not document order |
+| Error paths and the faults they raise | taskflow `<catch>` and `<throw>` (code, reason) |
 | Sub-task / mapping names | taskflow parameters → `mtTask.json` → `mappingId` |
 | In-out parameters, parameter file | `mct_*.MTT/mtTask.json` |
 | Source/target connections and objects | mapping graph `dataAdapter` → `cn_*.Connection` |
 | Expressions, variables | Expression transformation fields |
 | **Column lineage** (`o_proj_unit → SEGMENT_1`) | target `manualMappings` |
 | **Source/target field grids** (name, type, precision, scale, origin) | `dataAdapter.object.fields` |
+| **Sort keys with direction, aggregator group-by keys** | `sortEntries`, `sortFields`, `groupByFieldsList` |
 | Ticked designer checkboxes | `advancedProperties`, read/write options |
 | Lookups, filters, router conditions | `lookupConditions`, `readOptions`, group conditions |
-| Pre/Post SQL, write operations | target `advancedProperties` / `writeOptions` |
+| Pre/Post SQL, write operations, update strategy | target `advancedProperties` / `writeOptions` |
+| Schema-qualified objects, flat-file layout | `object.dbSchema`, `object.fileAttrs` |
 | Flow strings (`src->exp->tgt`) | walking the mapping `links` |
-| Mass-ingestion directories, actions, PGP keys, file retention | `fit_*.MI_TASK.dat` |
+| Mass-ingestion directories, file patterns, retention | `fit_*.MI_TASK.dat` |
+| Every file-operation property (rename suffix, PGP key, …) | `taskActions[].properties`, read generically |
 | **Mapping diagrams in the Word doc** | the preview JPEG inside each `.DTEMPLATE` |
 | Notification recipients, subjects, bodies | `emailNotificationService` parameters |
 | Error handling | taskflow `<catch>` handlers |
@@ -129,9 +133,11 @@ category of object found in the package, how many reached the output.
 
 ```
 Coverage                      100% of objects found in the package appear here
-  Taskflow steps              22/22 — complete
+  Taskflow steps              23/23 — complete
   Mappings reached by a step   9/9 — complete
   Target column mappings      33/33 — complete
+  Source/target columns      686/686 — complete
+  Sort / group-by keys         9/9 — complete
   ...
 ```
 
@@ -156,7 +162,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 65 tests
+python -m pytest        # 72 tests
 ```
 
 ## Requirements

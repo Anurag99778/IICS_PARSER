@@ -196,23 +196,49 @@ def _parse_transformation(raw: dict, class_info: Dict[str, str],
 
         obj = adapter.get("object") or {}
         tx.object_name = obj.get("objectName") or obj.get("name") or ""
+        tx.db_schema = obj.get("dbSchema", "") or ""
         tx.custom_query = obj.get("customQuery", "") or ""
         tx.field_count = len(obj.get("fields") or [])
         tx.fields = _object_fields(obj, raw)
+        tx.file_format = _file_format(obj.get("fileAttrs") or {})
+        tx.dynamic_file_name = _is_on(adapter.get("useDynamicFileName"))
 
         read = adapter.get("readOptions") or {}
         tx.filter_condition = read.get("filterCondition", "") or ""
         tx.advanced_filter = read.get("advancedFilterCondition", "") or ""
+        tx.user_defined_join = read.get("userDefinedJoin", "") or ""
+        tx.row_limit = _positive(read.get("rowLimit"))
+        # A source's read-time ordering. Direction matters as much as the key -
+        # a report sorted the wrong way is wrong.
         tx.sort_fields = [
-            s.get("fieldName", "") for s in (read.get("sortFields") or []) if s.get("fieldName")
+            _sort_key(s.get("fieldName"), _is_on(s.get("sortDescending")))
+            for s in (read.get("sortFields") or []) if s.get("fieldName")
         ]
 
         write = adapter.get("writeOptions") or {}
         tx.write_operations = list(write.get("operations") or [])
         tx.truncate_target = _is_on(write.get("truncate"))
+        tx.update_strategy = write.get("updateStrategyExpression", "") or ""
 
         tx.options.extend(_ticked(read, _READ_OPTION_LABELS))
         tx.options.extend(_ticked(write, _WRITE_OPTION_LABELS))
+        if tx.dynamic_file_name:
+            tx.options.append("Dynamic file name")
+
+    # A Sorter keeps its keys on the transformation itself, not on an adapter.
+    tx.sort_fields.extend(
+        _sort_key(e.get("fieldName"), not _is_on(e.get("ascending")))
+        for e in (raw.get("sortEntries") or []) if e.get("fieldName")
+    )
+    if raw.get("advancedSort"):
+        tx.sort_fields.append(f"Advanced: {raw['advancedSort']}")
+
+    # An Aggregator's group-by list decides what one output row means.
+    tx.group_by_fields = [
+        f.get("fieldName", "")
+        for f in ((raw.get("groupByFieldsList") or {}).get("fields") or [])
+        if f.get("fieldName")
+    ]
 
     # Pre/Post SQL, and any advanced option the designer shows as a checkbox.
     for prop in raw.get("advancedProperties") or []:
@@ -319,6 +345,40 @@ def _object_fields(obj: dict, raw: dict) -> List[TransformationField]:
             origin=origin or obj.get("objectName", "") or "",
         ))
     return out
+
+
+def _sort_key(name, descending: bool) -> str:
+    """``EMPLOYEE_ID (Ascending)`` - how the designer labels a sort key."""
+    return f"{name} ({'Descending' if descending else 'Ascending'})"
+
+
+def _positive(value) -> str:
+    """A numeric setting, kept only when it is actually in force."""
+    number = _as_int(value)
+    return str(number) if number else ""
+
+
+def _file_format(attrs: dict) -> str:
+    """Summarise a flat file's layout, which decides how it must be rebuilt."""
+    if not attrs:
+        return ""
+    parts = []
+    delimiter = attrs.get("delimiter")
+    if delimiter:
+        parts.append(f"Delimiter: {delimiter}")
+    if attrs.get("textQualifier"):
+        parts.append(f"Text qualifier: {attrs['textQualifier']}")
+    if _is_on(attrs.get("firstDataRowAsHeader")):
+        parts.append("First row is a header")
+    header_line = _as_int(attrs.get("headerLineNo"))
+    first_row = _as_int(attrs.get("firstDataRow"))
+    if header_line:
+        parts.append(f"Header line: {header_line}")
+    if first_row:
+        parts.append(f"First data row: {first_row}")
+    if attrs.get("escapeChar"):
+        parts.append(f"Escape character: {attrs['escapeChar']}")
+    return "; ".join(parts)
 
 
 def _as_int(value):

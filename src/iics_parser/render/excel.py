@@ -79,7 +79,7 @@ def clean_cell(value: object) -> Tuple[Optional[str], Optional[str]]:
 #: Per-sheet column widths, in the order of the column lists.
 _WIDTHS = {
     "Mapping Details": [7, 26, 18, 38, 38, 18, 40, 34, 26, 32, 40, 26, 32, 44, 40],
-    "Field level mapping": [7, 26, 18, 38, 38, 20, 52, 34, 28],
+    "Field level mapping": [7, 26, 18, 38, 38, 26, 20, 52, 34, 28],
     "Source & Target Fields": [7, 26, 40, 32, 12, 28, 12, 10, 8, 13, 9, 6, 32, 26],
 }
 

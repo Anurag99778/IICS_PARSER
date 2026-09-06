@@ -22,7 +22,7 @@ MAPPING_DETAIL_COLUMNS = [
 ]
 
 FIELD_LEVEL_COLUMNS = [
-    "S. No", "Taskflow", "TYPE", "SubTask", "Mapping Name",
+    "S. No", "Taskflow", "TYPE", "SubTask", "Mapping Name", "Transformation",
     "Input fields", "Values", "Path", "Notes",
 ]
 
@@ -105,24 +105,32 @@ def _object_pairs(step: Step) -> List[ObjectPair]:
         src, tgt = task.source, task.target
         if not src and not tgt:
             return []
+        # The pickup rules belong with the source they filter; what happens to
+        # the file afterwards belongs with the target.
+        source_object = []
+        if src and src.directory:
+            source_object.append(src.directory)
+        if src and src.pattern_label:
+            source_object.append(f"File pattern: {src.pattern_label}")
+        target_object = [tgt.directory] if tgt and tgt.directory else []
+        if tgt and tgt.file_exists_action:
+            target_object.append(f"If file exists: {tgt.file_exists_action}")
+
         notes = []
-        if src and src.file_pattern:
-            notes.append(f"File pattern: {src.file_pattern}")
         if src and src.archive_directory:
             notes.append(f"Archive directory: {src.archive_directory}")
         if src and src.after_pickup:
             notes.append(f"Source file after pickup: {src.after_pickup}")
-        if tgt and tgt.file_exists_action:
-            notes.append(f"If file exists: {tgt.file_exists_action}")
+        if src and src.batch_size:
+            notes.append(f"Batch size: {src.batch_size}")
         if tgt and tgt.actions:
-            notes.append("Action: " + ", ".join(tgt.actions))
-        if tgt and tgt.action_detail:
-            notes.append(tgt.action_detail)
+            notes.append("File operations: " + ", ".join(tgt.actions))
+        notes.extend(tgt.action_properties if tgt else [])
         return [ObjectPair(
             source_connection=src.connection_display if src else "",
-            source_object=src.directory if src else "",
+            source_object="\n".join(source_object),
             target_connection=tgt.connection_display if tgt else "",
-            target_object=tgt.directory if tgt else "",
+            target_object="\n".join(target_object),
             notes="\n".join(notes),
         )]
 
@@ -169,8 +177,10 @@ def _object_pairs(step: Step) -> List[ObjectPair]:
                 notes=_transform_notes(target),
             ))
 
-    if not pairs and lookup_note:
-        pairs.append(ObjectPair(lookup_filter=lookup_note))
+    # A mapping with neither a source nor a target still has logic worth
+    # showing - never return nothing when there is something to say.
+    if not pairs and mapping_note:
+        pairs.append(ObjectPair(lookup_filter=mapping_note))
     return pairs
 
 
@@ -202,10 +212,20 @@ def _reachable_targets(mapping: Mapping) -> Dict[str, List[Transformation]]:
 
 
 def _object_label(tx: Transformation) -> str:
-    """Object name, or the custom query when the source is a SQL override."""
+    """Object name, or the custom query when the source is a SQL override.
+
+    The schema qualifies the object where the export names one, because two
+    schemas holding the same table name is exactly the ambiguity a migration
+    cannot afford.
+    """
     if tx.custom_query:
         return f"Query: {tx.custom_query}"
-    return tx.object_name or tx.name
+    name = tx.object_name or tx.name
+    if tx.db_schema and name:
+        name = f"{tx.db_schema}.{name}"
+    if tx.dynamic_file_name:
+        name = f"{name} (file name built at runtime)"
+    return name
 
 
 def _source_filter_note(source: Transformation) -> str:
@@ -215,6 +235,10 @@ def _source_filter_note(source: Transformation) -> str:
         parts.append(f"Filter: {source.filter_condition}")
     if source.advanced_filter:
         parts.append(f"Filter: {source.advanced_filter}")
+    if source.user_defined_join:
+        parts.append(f"User-defined join: {source.user_defined_join}")
+    if source.row_limit:
+        parts.append(f"Row limit: {source.row_limit}")
     if source.sort_fields:
         parts.append("Sorted by: " + ", ".join(source.sort_fields))
     return "\n".join(parts)
@@ -256,12 +280,21 @@ def _lookup_filter_note(mapping: Mapping) -> str:
             parts.append(f"{tx.kind} ({tx.name}): {cond}")
 
     # Transformations that shape the data without conditions of their own still
-    # belong in the analysis - an Aggregator or Sorter changes the output.
-    shaping = [tx.name for tx in mapping.transformations
-               if tx.kind in ("Aggregator", "Sorter", "Joiner", "Union",
-                              "Normalizer", "Rank", "Deduplicate")]
+    # belong in the analysis - an Aggregator or Sorter changes the output. Their
+    # keys are the whole point, so name them rather than just the step.
+    shaping = []
+    for tx in mapping.transformations:
+        if tx.kind not in ("Aggregator", "Sorter", "Joiner", "Union",
+                           "Normalizer", "Rank", "Deduplicate"):
+            continue
+        label = f"{tx.kind} ({tx.name})"
+        if tx.sort_fields:
+            label += ": sorted by " + ", ".join(tx.sort_fields)
+        if tx.group_by_fields:
+            label += ": grouped by " + ", ".join(tx.group_by_fields)
+        shaping.append(label)
     if shaping:
-        parts.append("Transformations: " + ", ".join(shaping))
+        parts.append("Transformations: " + "; ".join(shaping))
     return "\n".join(parts)
 
 
@@ -275,10 +308,16 @@ def _transform_notes(tx: Transformation) -> str:
         parts.append("Operation: " + ", ".join(tx.write_operations))
     if tx.truncate_target:
         parts.append("Truncate target: Yes")
+    if tx.update_strategy:
+        parts.append(f"Update Strategy: {tx.update_strategy}")
     if tx.update_columns:
         parts.append("Update Columns: " + ", ".join(tx.update_columns))
     if tx.sort_fields:
         parts.append("Sorted by: " + ", ".join(tx.sort_fields))
+    if tx.group_by_fields:
+        parts.append("Grouped by: " + ", ".join(tx.group_by_fields))
+    if tx.file_format:
+        parts.append(f"File format: {tx.file_format}")
     # Checkboxes ticked in the designer - only the enabled ones.
     if tx.options:
         parts.append("Options: " + ", ".join(tx.options))
@@ -316,27 +355,42 @@ def _param_rows(step: Step) -> List[ParamRow]:
 # ---------------------------------------------------------------- sheet two
 
 def field_level_rows(integration: Integration) -> List[List[str]]:
-    """Rows for the 'Field level mapping' sheet: expressions and parameters."""
+    """Rows for the 'Field level mapping' sheet: expressions and parameters.
+
+    Each row names the transformation it belongs to, so an expression, a sort
+    key and a target column mapping can be told apart at a glance.
+    """
     rows: List[List[str]] = []
     for step in integration.steps:
-        entries: List[Tuple[str, str, str, str]] = []
+        # (transformation, field, value, path, note)
+        entries: List[Tuple[str, str, str, str, str]] = []
 
         for p in _param_rows(step):
-            entries.append((p.name, p.value, p.path, ""))
+            entries.append(("", p.name, p.value, p.path, ""))
 
         mapping = step.task.mapping if step.task and step.task.mapping else None
         if mapping:
             for tx in mapping.transformations:
                 for f in tx.expression_fields:
-                    note = tx.name if tx.kind == "Expression" else f"{tx.kind}: {tx.name}"
-                    if f.field_type == "VARIABLE":
-                        note = _join(note, "Variable field")
-                    entries.append((f.name, f.expression, "", note))
+                    note = "Variable field" if f.field_type == "VARIABLE" else tx.kind
+                    entries.append((tx.name, f.name, f.expression, "", note))
+
+                # Ordering and grouping are field-level logic too: they decide
+                # which rows survive and in what order they land.
+                for key in tx.sort_fields:
+                    name, _, direction = key.partition(" (")
+                    entries.append((tx.name, name.strip(),
+                                    direction.rstrip(")") or "Ascending", "",
+                                    f"{tx.kind} sort key"))
+                for name in tx.group_by_fields:
+                    entries.append((tx.name, name, "Group by", "",
+                                    f"{tx.kind} group-by field"))
 
             # Column-level lineage: which field lands in which target column.
             for target in mapping.targets:
                 for fm in target.field_mappings:
                     entries.append((
+                        target.name,
                         fm.from_field,
                         f"→ {fm.to_field}",
                         "",
@@ -346,14 +400,14 @@ def field_level_rows(integration: Integration) -> List[List[str]]:
         if not entries:
             continue
 
-        for i, (name, value, path, note) in enumerate(entries):
+        for i, (transformation, name, value, path, note) in enumerate(entries):
             rows.append([
                 step.seq if i == 0 else "",
                 step.title if i == 0 else "",
                 step.step_type if i == 0 else "",
                 step.task_name if i == 0 else "",
                 step.mapping_name if i == 0 else "",
-                name, value, path, note,
+                transformation, name, value, path, note,
             ])
     return rows
 

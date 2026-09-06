@@ -253,7 +253,7 @@ def test_router_target_gets_its_own_row(integration):
 
 def test_field_level_rows_contain_expressions(integration):
     rows = field_level_rows(integration)
-    pairs = {(r[5], r[6]) for r in rows}
+    pairs = {(r[6], r[7]) for r in rows}
     assert ("O_TRX710", "710") in pairs
     assert ("o_pm_end_date", "SUBSTR(project_manager_end_date,1,10)") in pairs
     assert ("tmp_org_id", "util:getOrganizationId()") in pairs
@@ -325,7 +325,7 @@ def test_target_field_mappings_are_captured(integration):
 
 def test_field_mappings_reach_the_field_level_sheet(integration):
     rows = field_level_rows(integration)
-    pairs = {(r[5], r[6]) for r in rows}
+    pairs = {(r[6], r[7]) for r in rows}
     assert ("O_TRX710", "→ TRX_TYPE") in pairs
     assert ("o_proj_unit", "→ SEGMENT_1") in pairs
 
@@ -481,3 +481,80 @@ def test_object_fields_reach_their_own_sheet(integration):
     # Every column of the reference target reaches the sheet.
     segments = [r for r in rows if str(r[5]).startswith("SEGMENT_")]
     assert len(segments) >= 13
+
+
+# ------------------------------------- error paths, ordering and file actions
+
+def test_throw_steps_are_documented(integration):
+    """A <throw> is the visible end of an error path.
+
+    It names the fault an operator will actually see, so it belongs in the
+    analysis rather than being walked past as flow plumbing.
+    """
+    throw = next(s for s in integration.steps if s.step_type == "Throw")
+    assert throw.title == "Fail"
+    values = {p.name: p.value for p in throw.parameters}
+    assert values["Code"] == "Badcode 400"
+    assert values["Reason"] == "Failed in the SFTP"
+    # Empty inputs are not reported as blank rows.
+    assert "Detail" not in values
+
+
+def test_throw_reaches_the_mapping_details_sheet(integration):
+    rows = mapping_detail_rows(integration)
+    assert any(r[2] == "Throw" for r in rows)
+    assert any("Badcode 400" in str(cell) for r in rows for cell in r)
+
+
+def test_sort_keys_carry_their_direction(integration):
+    """A report sorted the wrong way is wrong, so direction is not optional."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_LND_TO_FF_CONCUR_EMPLOYYE_OUTBOUND")
+    sorter = next(t for t in mapping.transformations if t.kind == "Sorter")
+    assert sorter.sort_fields == [
+        "EMPLOYEE_ID (Ascending)", "SEGMENT_1 (Ascending)",
+        "SEGMENT_2 (Ascending)", "SEGMENT_3 (Ascending)",
+    ]
+
+    source = next(t for m in integration.mappings for t in m.sources
+                  if t.name == "src_LND_LKP_PROJECTS_TOPIC")
+    assert source.sort_fields == ["PROJECT_NUMBER (Ascending)"]
+
+
+def test_aggregator_group_by_fields_are_captured(integration):
+    """The group-by list decides what one output row means."""
+    mapping = next(m for m in integration.mappings
+                   if m.name == "m_LND_TO_FF_CONCUR_EMPLOYYE_OUTBOUND")
+    aggregator = next(t for t in mapping.transformations if t.kind == "Aggregator")
+    assert aggregator.group_by_fields == [
+        "EMPLOYEE_ID", "SEGMENT_1", "SEGMENT_2", "SEGMENT_3",
+    ]
+
+
+def test_sort_and_group_keys_reach_the_field_sheet(integration):
+    rows = field_level_rows(integration)
+    triples = {(r[5], r[6], r[7]) for r in rows}
+    assert ("Sorter", "EMPLOYEE_ID", "Ascending") in triples
+    assert ("Aggregator", "SEGMENT_1", "Group by") in triples
+
+
+def test_file_operation_properties_are_captured_generically(integration):
+    """A rename suffix matters as much as a PGP key - read every property."""
+    rename = next(t for t in integration.tasks
+                  if t.name == "fit_ARCHIVE_LOCAL_FF_CONCUR_PM_ENDDATED_DETAILS")
+    assert rename.target.actions == ["Rename"]
+    assert rename.target.action_properties == [
+        "Rename · renameFileSuffix: _CONCUR_EMP_OUTBOUND"
+    ]
+
+    sftp = next(t for t in integration.tasks
+                if t.name == "fit_LOCAL_FF_CONCUR_SFTP_EMPLOYEE_DETAILS")
+    assert "PGPEncrypt · pgpFileSuffix: .pgp" in sftp.target.action_properties
+    assert sftp.source.pattern_label == "Wildcard: EMPLOYEE_t0028229unfm_*txt"
+
+
+def test_file_operation_detail_reaches_the_sheet(integration):
+    rows = mapping_detail_rows(integration)
+    blob = "\n".join(str(cell) for r in rows for cell in r)
+    assert "_CONCUR_EMP_OUTBOUND" in blob
+    assert "Wildcard: *.zip" in blob

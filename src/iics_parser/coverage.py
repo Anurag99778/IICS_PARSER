@@ -152,7 +152,34 @@ def audit(integration: Integration,
     lines.append(CoverageLine("Source/target columns", len(columns),
                               len(columns) - len(missing_columns), missing_columns))
 
-    # 11. Transformations that shape data but carry no condition of their own -
+    # 11. Sort and group-by keys. These decide row order and row identity, and
+    #     each is a single string easily lost between parse and render.
+    keys, missing_keys = [], []
+    for mapping in integration.mappings:
+        for tx in mapping.transformations:
+            for key in tx.sort_fields + tx.group_by_fields:
+                keys.append(key)
+                # A sort key renders as name and direction in separate cells on
+                # the field sheet, so check the field name itself.
+                if key.partition(" (")[0] not in blob:
+                    missing_keys.append(f"{mapping.name} · {tx.name} · {key}")
+    lines.append(CoverageLine("Sort / group-by keys", len(keys),
+                              len(keys) - len(missing_keys), missing_keys))
+
+    # 12. Mass-ingestion file operations and the properties they carry.
+    ops, missing_ops = [], []
+    for task in integration.tasks:
+        for side in (task.source, task.target):
+            if side is None:
+                continue
+            for item in list(side.actions) + list(side.action_properties):
+                ops.append(item)
+                if item not in blob:
+                    missing_ops.append(f"{task.name} · {item}")
+    lines.append(CoverageLine("File operation actions", len(ops),
+                              len(ops) - len(missing_ops), missing_ops))
+
+    # 13. Transformations that shape data but carry no condition of their own -
     #    easy to lose, so confirm each is named somewhere.
     shaping, missing_shaping = [], []
     for mapping in integration.mappings:

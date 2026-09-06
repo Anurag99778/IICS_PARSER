@@ -59,8 +59,14 @@ _INTERESTING_PARAMS = {
 
 _NS = {"types1": "http://schemas.active-endpoints.com/appmodules/repository/2010/10/avrepository.xsd"}
 
+#: A ``<throw>`` ends a branch by raising a named fault. The designer shows the
+#: three inputs under these labels, and they are what the analysis documents
+#: record for an error path.
+_THROW_PARAMS = {"code": "Code", "reason": "Reason", "detail": "Detail"}
+
 #: Elements that can appear as a node in the flow graph.
-_NODES = {"eventContainer", "container", "assignment", "decision", "flow", "start", "end", "service"}
+_NODES = {"eventContainer", "container", "assignment", "decision", "flow",
+          "start", "end", "service", "throw"}
 
 
 def parse_taskflow(path: Path, warnings: Optional[List[str]] = None):
@@ -314,7 +320,7 @@ class _Graph:
     def step_nodes(self) -> List[ET.Element]:
         return [
             el for el in self.body.iter()
-            if _tag(el) in ("eventContainer", "assignment", "decision")
+            if _tag(el) in ("eventContainer", "assignment", "decision", "throw")
         ]
 
     # -- step construction -----------------------------------------------
@@ -330,6 +336,8 @@ class _Graph:
             return _parse_service(node, branch, depth, self._catch_modes(node))
         if tag == "assignment":
             return _parse_assignment(node, branch, depth)
+        if tag == "throw":
+            return _parse_throw(node, branch, depth)
         if tag == "decision":
             return Step(
                 seq="", title=_title(node) or "Decision", step_type="Decision",
@@ -424,6 +432,26 @@ def _parse_assignment(el: ET.Element, branch: str, depth: int) -> Step:
             step.parameters.append(
                 TaskParameter(name=target.split(".")[-1], value=_normalise(value),
                               path=target, source=op.get("source", ""))
+            )
+    return step
+
+
+def _parse_throw(el: ET.Element, branch: str, depth: int) -> Step:
+    """A ``<throw>`` deliberately fails the taskflow with a code and reason.
+
+    It is the visible end of an error path, so it belongs in the analysis: it
+    says which fault a downstream operator will actually see.
+    """
+    step = Step(seq="", title=_title(el) or "Throw", step_type="Throw",
+                branch=branch, depth=depth)
+    for param in el.iter():
+        if _tag(param) != "parameter":
+            continue
+        label = _THROW_PARAMS.get(param.get("name", "").lower())
+        value = _param_value(param)
+        if label and value:
+            step.parameters.append(
+                TaskParameter(name=label, value=value, source=param.get("source", ""))
             )
     return step
 

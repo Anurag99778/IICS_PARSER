@@ -30,8 +30,18 @@ class Connection:
     guid: str = ""
     host: str = ""
     database: str = ""
+    schema: str = ""
     username: str = ""
     runtime_environment: str = ""
+
+    @property
+    def schema_label(self) -> str:
+        """The schema an analyst would write down.
+
+        Relational connections either name a schema outright or, on Oracle,
+        connect as the schema owner - so the login name *is* the schema.
+        """
+        return self.schema or self.username
 
     @property
     def display(self) -> str:
@@ -107,10 +117,18 @@ class Transformation:
     connection_name: str = ""
     connection_type: str = ""
     object_name: str = ""
+    db_schema: str = ""
     custom_query: str = ""
     filter_condition: str = ""
     advanced_filter: str = ""
+    row_limit: str = ""
+    user_defined_join: str = ""
+    #: Ordering applied here, each key with its direction:
+    #: ``EMPLOYEE_ID (Ascending)``. Covers both a source's read-time sort and a
+    #: Sorter transformation's own sort keys - the designer shows them the same
+    #: way and an analyst reads them the same way.
     sort_fields: List[str] = field(default_factory=list)
+    group_by_fields: List[str] = field(default_factory=list)
     lookup_conditions: List[LookupCondition] = field(default_factory=list)
     lookup_unconnected: bool = False
     lookup_return_field: str = ""
@@ -120,7 +138,12 @@ class Transformation:
     post_sql: str = ""
     write_operations: List[str] = field(default_factory=list)
     truncate_target: bool = False
+    update_strategy: str = ""
     update_columns: List[str] = field(default_factory=list)
+    #: Flat-file layout (delimiter, qualifier, header row), summarised.
+    file_format: str = ""
+    #: The target file name is built at runtime from a field, not fixed.
+    dynamic_file_name: bool = False
     field_count: int = 0
     fields: List[TransformationField] = field(default_factory=list)
     field_mappings: List[FieldMapping] = field(default_factory=list)
@@ -191,11 +214,29 @@ class FileOperation:
     connection_type: str = ""
     directory: str = ""
     file_pattern: str = ""
+    file_pattern_type: str = ""  # Wildcard / Regex / Time Range
+    batch_size: str = ""
     archive_directory: str = ""
     file_exists_action: str = ""
     after_pickup: str = ""       # what happens to the source file: KEEP/ARCHIVE/DELETE
     actions: List[str] = field(default_factory=list)
-    action_detail: str = ""      # e.g. the PGP key an encrypt step uses
+    #: Every property the file-operation steps carry, as
+    #: ``Rename · renameFileSuffix: _CONCUR_ORG_OUTBOUND``. Kept generically so
+    #: an action type this parser has not seen still reports its settings.
+    action_properties: List[str] = field(default_factory=list)
+
+    @property
+    def pattern_label(self) -> str:
+        """``Wildcard: *.zip`` - pattern and how it is interpreted."""
+        if not self.file_pattern:
+            return ""
+        if self.file_pattern_type:
+            return f"{self.file_pattern_type}: {self.file_pattern}"
+        return self.file_pattern
+
+    @property
+    def action_detail(self) -> str:
+        return "; ".join(self.action_properties)
 
     @property
     def connection_display(self) -> str:

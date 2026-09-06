@@ -41,6 +41,7 @@ def parse_connection(asset: Asset) -> Optional[Connection]:
         guid=obj.get("federatedId", "") or asset.guid,
         host=obj.get("host", "") or "",
         database=obj.get("database", "") or "",
+        schema=obj.get("schema", "") or "",
         username=obj.get("username", "") or "",
         runtime_environment=str(obj.get("runtimeEnvironmentId", "") or "").lstrip("@"),
     )
@@ -108,13 +109,16 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
 
     raw_actions = data.get("taskActions") or []
     actions = [a.get("type", "") for a in raw_actions if a.get("type")]
-    # Encryption steps name the key they use - security-relevant for a migration.
-    detail = []
-    for action in raw_actions:
-        props = action.get("properties") or {}
-        for key, label in (("pgpKeyId", "PGP key"), ("pgpFileSuffix", "Suffix")):
-            if props.get(key):
-                detail.append(f"{label}: {props[key]}")
+    # Every property a file operation carries, whatever the action type - a
+    # rename suffix, a PGP key, a compression format. Reading them generically
+    # means an action this parser has never seen still reports its settings
+    # instead of appearing as a bare verb.
+    detail = [
+        f"{action.get('type', 'Action')} · {key}: {value}"
+        for action in raw_actions
+        for key, value in sorted((action.get("properties") or {}).items())
+        if value not in (None, "")
+    ]
     src_opts = data.get("sourceOptions") or {}
     tgt_opts = data.get("targetOptions") or {}
     src_conn = data.get("sourceConnection") or {}
@@ -132,6 +136,8 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
         connection_type=_conn_type(src_conn),
         directory=src_opts.get("src.download.path", "") or "",
         file_pattern=src_opts.get("src.file.pattern", "") or "",
+        file_pattern_type=_titlecase(src_opts.get("src.file.pattern.type", "")),
+        batch_size=str(src_opts.get("batchSize", "") or ""),
         archive_directory=src_opts.get("src.archive.dir", "") or "",
         after_pickup=_titlecase(src_opts.get("src.file.delete", "")),
     )
@@ -141,7 +147,7 @@ def parse_mass_ingestion(asset: Asset) -> Optional[Task]:
         directory=tgt_opts.get("tgt.download.path", "") or "",
         file_exists_action=_titlecase(tgt_opts.get("fileExistsAction", "")),
         actions=actions,
-        action_detail="; ".join(detail),
+        action_properties=detail,
     )
     return task
 
