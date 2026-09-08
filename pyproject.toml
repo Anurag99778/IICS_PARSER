@@ -26,7 +26,10 @@ iics-parser = "iics_parser.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+# Anything here that is not a .py file has to be listed, or pip installs the
+# code without it and the failure only shows up in a container.
 iics_parser = ["templates/*.docx"]
+"iics_parser.web" = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

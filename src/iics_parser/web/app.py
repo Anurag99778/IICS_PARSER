@@ -20,10 +20,10 @@ import uuid
 import zipfile
 from io import BytesIO
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from flask import (Flask, abort, redirect, render_template, request,
-                   send_file, send_from_directory, url_for)
+from flask import (Flask, abort, render_template, request, send_file,
+                   send_from_directory, url_for)
 from werkzeug.utils import secure_filename
 
 from .. import coverage
