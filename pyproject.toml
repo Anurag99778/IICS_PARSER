@@ -15,8 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ai = ["anthropic>=0.40"]
+ai = ["openai>=1.40"]
 dev = ["pytest>=7.4"]
+web = ["Flask>=3.0", "gunicorn>=21.2"]
 
 [project.scripts]
 iics-parser = "iics_parser.cli:main"

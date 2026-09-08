@@ -359,7 +359,7 @@ def _param_rows(step: Step) -> List[ParamRow]:
 # ---------------------------------------------------------------- sheet two
 
 def field_level_rows(integration: Integration) -> List[List[str]]:
-    """Rows for the 'Field level mapping' sheet: expressions and parameters.
+    """Rows for the 'Field Values' sheet: expressions and parameters.
 
     Each row names the transformation it belongs to, so an expression, a sort
     key and a target column mapping can be told apart at a glance.

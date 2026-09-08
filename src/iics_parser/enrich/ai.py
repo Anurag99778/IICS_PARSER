@@ -1,15 +1,21 @@
 """Optional AI drafting for the narrative fields of the analysis document.
 
 Everything structural comes from the export package. A handful of fields are
-editorial - the business-purpose paragraph, a criticality call, the monitoring
-and recovery notes - and those are what this module drafts, from a factual
-summary of what the parser already found.
+editorial - the integration-purpose paragraph, a criticality call, the
+monitoring and recovery notes - and those are what this module drafts, from a
+factual summary of what the parser already found.
 
-It is strictly optional. With no API key (or no ``anthropic`` package) the
-pipeline runs unchanged and those fields stay as ``[to be confirmed]``.
-Precedence is always overrides > AI draft > parsed value, so a human's entry is
-never overwritten, and every AI-drafted field is recorded in
-``Integration.warnings`` so reviewers can see what was not read off the export.
+It is strictly optional. With no API key (or no ``openai`` package) the pipeline
+runs unchanged and those fields stay as ``[to be confirmed]``. Precedence is
+always overrides > AI draft > parsed value, so a human's entry is never
+overwritten, and every AI-drafted field is recorded in ``Integration.warnings``
+so reviewers can see what was not read off the export.
+
+Configuration, all through the environment:
+
+* ``OPENAI_API_KEY``   - required for any drafting to happen
+* ``OPENAI_MODEL``     - defaults to ``gpt-4o``
+* ``OPENAI_BASE_URL``  - for an Azure/gateway deployment rather than api.openai.com
 """
 
 from __future__ import annotations
@@ -20,7 +26,14 @@ from typing import Dict, List, Optional
 
 from ..model.ir import Integration
 
-MODEL = "claude-opus-5"
+#: Overridden by ``OPENAI_MODEL`` so a deployment can pin whichever GPT model
+#: the organisation has approved without a code change.
+DEFAULT_MODEL = "gpt-4o"
+
+
+def model_name() -> str:
+    return os.environ.get("OPENAI_MODEL", "").strip() or DEFAULT_MODEL
+
 
 #: Fields the model may draft, with the guidance shown to it.
 DRAFTABLE = {
@@ -63,24 +76,31 @@ _SYSTEM = (
 def is_available() -> bool:
     """True if the SDK is installed and a credential is configured."""
     try:
-        import anthropic  # noqa: F401
+        import openai  # noqa: F401
     except ImportError:
         return False
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    return bool(os.environ.get("OPENAI_API_KEY"))
 
 
-def enrich(integration: Integration, model: str = MODEL) -> Dict[str, str]:
+def enrich(integration: Integration, model: Optional[str] = None) -> Dict[str, str]:
     """Draft the narrative fields, applying them only where still empty.
 
     Returns the fields that were applied. Any failure is reported as a warning
-    on the integration and leaves the document unchanged.
+    on the integration and leaves the document unchanged - drafting prose is
+    never a reason for a run to fail.
     """
     try:
-        import anthropic
+        import openai
     except ImportError:
         integration.warnings.append(
-            "AI enrichment skipped: the 'anthropic' package is not installed "
+            "AI enrichment skipped: the 'openai' package is not installed "
             "(pip install 'iics-parser[ai]')."
+        )
+        return {}
+
+    if not os.environ.get("OPENAI_API_KEY"):
+        integration.warnings.append(
+            "AI enrichment skipped: OPENAI_API_KEY is not set."
         )
         return {}
 
@@ -89,6 +109,7 @@ def enrich(integration: Integration, model: str = MODEL) -> Dict[str, str]:
     if not wanted:
         return {}
 
+    model = model or model_name()
     prompt = (
         "Facts extracted from the export package:\n\n"
         f"{json.dumps(facts, indent=2)}\n\n"
@@ -99,19 +120,28 @@ def enrich(integration: Integration, model: str = MODEL) -> Dict[str, str]:
     )
 
     try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
+        client = openai.OpenAI(base_url=os.environ.get("OPENAI_BASE_URL") or None)
+        response = client.chat.completions.create(
             model=model,
-            max_tokens=4000,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-            output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "integration_documentation",
+                    "strict": True,
+                    "schema": _SCHEMA,
+                },
+            },
         )
-        if response.stop_reason == "refusal":
-            integration.warnings.append("AI enrichment declined by the model; fields left blank.")
+        choice = response.choices[0]
+        if getattr(choice.message, "refusal", None):
+            integration.warnings.append(
+                "AI enrichment declined by the model; fields left blank.")
             return {}
-        text = next(b.text for b in response.content if b.type == "text")
-        drafted = json.loads(text)
+        drafted = json.loads(choice.message.content or "{}")
     except Exception as exc:                      # noqa: BLE001 - never fail the run
         integration.warnings.append(f"AI enrichment failed ({type(exc).__name__}: {exc}).")
         return {}
@@ -126,7 +156,8 @@ def enrich(integration: Integration, model: str = MODEL) -> Dict[str, str]:
 
     if applied:
         integration.warnings.append(
-            "AI-drafted (verify before publishing): " + ", ".join(sorted(applied))
+            f"AI-drafted with {model} (verify before publishing): "
+            + ", ".join(sorted(applied))
         )
     if uncertain:
         integration.warnings.append(

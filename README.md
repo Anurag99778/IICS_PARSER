@@ -3,17 +3,60 @@
 Turns an Informatica IICS export package (`.zip`) into the analysis documents
 used for the Oracle Integration Cloud migration:
 
-* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field level mapping* and
+* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field Values* and
   *Source & Target Fields* sheets, plus a *Parse Report* with a coverage table
 * **`<taskflow>_Analysis.docx`** — the process document, built on your own
   template, with the mapping diagrams embedded automatically
 
-What used to be a day of digging through the IICS UI is a single command.
+What used to be a day of digging through the IICS UI is a single command — or a
+single upload, if you deploy the web front end.
 
 ```bash
 pip install -e .
 iics-parser export.zip -o output/
 ```
+
+## Deploy the web app
+
+One command on any Linux box with Docker. Nothing else to install.
+
+```bash
+git clone <this repo> && cd IICS_PARSER
+docker compose up -d --build
+```
+
+Then open **`http://<server-ip>/parserIICS`**, drop in a `.zip` export package
+and download the Excel and Word documents. Several packages can be uploaded at
+once, and the page reports the coverage figure for each so you can see at a
+glance whether an analysis is whole.
+
+Settings all have working defaults; copy `.env.example` to `.env` to change any
+of them:
+
+| | |
+|---|---|
+| `HTTP_PORT` | host port nginx binds (default `80`) |
+| `URL_PREFIX` | the path the app is served under (default `/parserIICS`) |
+| `MAX_UPLOAD_MB` | largest upload accepted (default `200`) |
+| `JOB_TTL_HOURS` | how long generated documents stay downloadable (default `6`) |
+| `OPENAI_API_KEY` | enables the "draft with AI" checkbox; optional |
+| `OPENAI_MODEL` | which GPT model to use (default `gpt-4o`) |
+
+Uploads and generated documents are deleted once they pass `JOB_TTL_HOURS` — an
+export package contains connection detail that should not sit on a disk
+indefinitely.
+
+```bash
+docker compose logs -f          # watch it run
+docker compose down             # stop
+docker compose up -d --build    # after a git pull
+```
+
+**Already running something on port 80?** Set `HTTP_PORT=8080` in `.env`, or
+drop the `web` service and point your existing nginx at the app container —
+`deploy/nginx.conf` is the location block to copy. The app handles the
+`/parserIICS` prefix itself, so it works whether your proxy forwards the full
+path or strips the prefix first.
 
 > **If `iics-parser` is "not recognized" (common on Windows):** pip installs the
 > command into a `Scripts` directory that is often not on PATH. Use the module
@@ -37,7 +80,7 @@ iics-parser exports/ -o output/
 # Only the spreadsheet
 iics-parser export.zip --format excel
 
-# Let Claude draft the narrative fields (needs ANTHROPIC_API_KEY)
+# Let GPT draft the narrative fields (needs OPENAI_API_KEY)
 iics-parser export.zip --ai
 
 # Scaffold the fields a human has to supply
@@ -79,8 +122,9 @@ Almost everything. The export package is far more structured than it looks:
 ### What it cannot know
 
 Business owner, technical owner, criticality, trigger type, environments and
-the business-purpose narrative are organisational facts, not metadata. They come
-from `overrides.yaml`, or are drafted by Claude with `--ai`. Precedence is:
+the integration-purpose narrative are organisational facts, not metadata. They
+come from `overrides.yaml`, or are drafted by GPT with `--ai` (or the checkbox
+in the web app). Precedence is:
 
 ```
 overrides.yaml  >  AI draft  >  parsed value
@@ -119,9 +163,11 @@ parse/       taskflow · mapping graph · tasks · connections  →  build.py
    ↓
 model/ir.py  one normalised Integration object   ← the single source of truth
    ↓
-enrich/      overrides.yaml, optional Claude drafting
+enrich/      overrides.yaml, optional GPT drafting
    ↓
 render/      rows.py → excel.py · word.py
+   ↓
+web/         Flask upload form over the same pipeline
 ```
 
 Everything renders from the same intermediate representation, so the Excel and
@@ -164,11 +210,12 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 78 tests
+python -m pytest        # 87 tests
 ```
 
 ## Requirements
 
 Python 3.9+, `openpyxl`, `python-docx`, `PyYAML`. The `--ai` flag additionally
-needs `pip install 'iics-parser[ai]'` and an `ANTHROPIC_API_KEY`; without them
-the tool runs exactly the same and leaves the narrative fields to a human.
+needs `pip install 'iics-parser[ai]'` and an `OPENAI_API_KEY`; without them the
+tool runs exactly the same and leaves the narrative fields to a human. The web
+app needs `pip install 'iics-parser[web]'`, or just use the container.
