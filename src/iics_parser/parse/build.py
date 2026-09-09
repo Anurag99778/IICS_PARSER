@@ -52,10 +52,17 @@ def build_integration(package: ExportPackage,
         )
         if task.mapping is None and ref:
             warnings.append(
-                f"{task.name}: referenced mapping {ref} not present in package"
+                f"{task.name}: mapping {ref} is not in this package by reference"
+                + (" or by name" if task.name else "")
             )
         integration.tasks.append(task)
         tasks_by_name[task.name] = task
+
+    # A task whose reference and name both missed, in a package holding exactly
+    # one task and one mapping, has only one thing it could possibly run. That
+    # is elimination, not a guess - but say so, because it is not what the
+    # export actually stated.
+    _link_by_elimination(integration, warnings)
 
     for asset in package.by_type("MI_TASK"):
         task = asset_parsers.parse_mass_ingestion(asset)
@@ -169,9 +176,42 @@ def _package_name(package: ExportPackage, integration: Integration) -> str:
     return package.project_name or ""
 
 
+#: Prefixes teams put on a mapping task that runs mapping ``m_<name>``. IICS
+#: does not impose one, so several are in use across a single estate; longest
+#: first so ``mct_`` is never read as a shorter prefix.
+_TASK_PREFIXES = ("mctt_", "mct_", "mtt_", "mt_", "t_")
+
+
 def _mapping_name_for(task_name: str) -> str:
-    """``mct_FOO`` conventionally runs mapping ``m_FOO`` - a naming fallback."""
-    return "m_" + task_name[4:] if task_name.startswith("mct_") else task_name
+    """``mct_FOO`` / ``mt_FOO`` conventionally run mapping ``m_FOO``."""
+    for prefix in _TASK_PREFIXES:
+        if task_name.startswith(prefix):
+            return "m_" + task_name[len(prefix):]
+    return task_name
+
+
+def _link_by_elimination(integration: Integration, warnings: List[str]) -> None:
+    """Link the only task to the only mapping when nothing else matched.
+
+    A package built around one mapping task is the common single-integration
+    export. If its ``mappingId`` points at a GUID the export did not carry and
+    the naming convention does not match either, there is still exactly one
+    mapping it can be running.
+    """
+    unlinked = [t for t in integration.tasks
+                if t.task_type == "MCT" and t.mapping is None]
+    if len(unlinked) != 1 or len(integration.mappings) != 1:
+        return
+    mapping = integration.mappings[0]
+    if any(t.mapping is mapping for t in integration.tasks):
+        return
+
+    unlinked[0].mapping = mapping
+    warnings.append(
+        f"{unlinked[0].name} does not name its mapping in a way this package "
+        f"can resolve, so it has been matched to '{mapping.name}' - the only "
+        f"mapping present. Confirm that is the mapping it runs."
+    )
 
 
 def _derive_defaults(integration: Integration) -> None:

@@ -129,3 +129,78 @@ def test_coverage_is_complete_for_a_single_mapping_package(with_task):
                            object_field_rows(with_task))
     incomplete = [(l.category, l.summary, l.missing) for l in lines if not l.complete]
     assert not incomplete, f"objects missing from the output: {incomplete}"
+
+
+# ------------------------------------------- linking a task to its mapping
+
+def _package(tmp_path, task_name, *, break_reference=False):
+    """A one-task, one-mapping package, optionally with a dangling mappingId."""
+    import io
+    import json
+    import zipfile
+
+    zip_path = synthetic.write_package(
+        tmp_path / f"{task_name}.zip", project="WFM",
+        mapping_name="m_TEAM_MEMBER_LOAD", task_name=task_name)
+
+    if break_reference:
+        with zipfile.ZipFile(zip_path) as src:
+            items = {n: src.read(n) for n in src.namelist()}
+        key = f"Explore/WFM/{task_name}.MTT.zip"
+        task = json.loads(zipfile.ZipFile(io.BytesIO(items[key])).read("mtTask.json"))
+        task[0]["mappingId"] = "@GUID_NOT_IN_THIS_PACKAGE"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as inner:
+            inner.writestr("mtTask.json", json.dumps(task))
+        items[key] = buffer.getvalue()
+        with zipfile.ZipFile(zip_path, "w") as out:
+            for name, body in items.items():
+                out.writestr(name, body)
+
+    return build_integration(
+        ExportPackage.open(zip_path, tmp_path / f"x_{task_name}"),
+        image_dir=tmp_path / f"i_{task_name}")
+
+
+@pytest.mark.parametrize("task_name", [
+    "mct_TEAM_MEMBER_LOAD",      # the convention the reference package uses
+    "mt_TEAM_MEMBER_LOAD",       # equally common, and used in the field
+    "mtt_TEAM_MEMBER_LOAD",
+    "t_TEAM_MEMBER_LOAD",
+])
+def test_a_task_finds_its_mapping_by_name_whatever_the_prefix(tmp_path, task_name):
+    """IICS imposes no prefix, so several are in use across one estate."""
+    integration = _package(tmp_path, task_name, break_reference=True)
+
+    assert len(integration.steps) == 1, "task and mapping split into two steps"
+    assert integration.steps[0].mapping_name == "m_TEAM_MEMBER_LOAD"
+    assert not any("has been matched to" in w for w in integration.warnings), \
+        "a name this parser understands should not need matching by elimination"
+
+
+def test_an_unrecognisable_name_still_links_but_says_so(tmp_path):
+    """One task and one mapping leaves only one possibility - and a caveat."""
+    integration = _package(tmp_path, "LoadDemographics", break_reference=True)
+
+    assert len(integration.steps) == 1
+    assert integration.steps[0].mapping_name == "m_TEAM_MEMBER_LOAD"
+    assert any("Confirm that is the mapping it runs" in w
+               for w in integration.warnings), integration.warnings
+
+    blob = "\n".join(str(c) for r in mapping_detail_rows(integration) for c in r)
+    assert "STG_EMPLOYEES" in blob and "DW_EMPLOYEES" in blob
+
+
+def test_elimination_never_guesses_between_candidates(tmp_path):
+    """With more than one mapping there is no single possibility to fall back on."""
+    from iics_parser.model.ir import Integration, Mapping, Task
+    from iics_parser.parse.build import _link_by_elimination
+
+    integration = Integration(
+        tasks=[Task(name="whatever", task_type="MCT")],
+        mappings=[Mapping(name="m_ONE"), Mapping(name="m_TWO")],
+    )
+    _link_by_elimination(integration, integration.warnings)
+
+    assert integration.tasks[0].mapping is None
+    assert integration.warnings == []
