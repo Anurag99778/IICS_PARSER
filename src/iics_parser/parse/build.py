@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ..extract.package import ExportPackage
-from ..model.ir import Integration, Task
+from ..model.ir import Integration, Step, Task
 from . import assets as asset_parsers
 from .mapping import parse_mapping
 from .taskflow import parse_taskflow
@@ -90,8 +91,82 @@ def build_integration(package: ExportPackage,
     if not integration.meta.taskflow_name and taskflows:
         integration.meta.taskflow_name = taskflows[0].name
 
+    # 5. A package with no taskflow still has to be documented.
+    if not integration.steps:
+        _document_without_a_taskflow(integration, warnings)
+        if not integration.meta.taskflow_name:
+            integration.meta.taskflow_name = _package_name(package, integration)
+
     _derive_defaults(integration)
     return integration
+
+
+def _document_without_a_taskflow(integration: Integration,
+                                 warnings: List[str]) -> None:
+    """Give a package with no taskflow something to document.
+
+    IICS exports a single asset as readily as a whole orchestration, so a
+    package is often just one mapping, or a mapping task and the mapping it
+    runs, with nothing to sequence them. Every renderer works from steps, so
+    without this the workbook and the document come out empty - which is
+    exactly what a single-mapping export used to produce.
+
+    The assets are listed in name order. That is not execution order, and the
+    Parse Report says so rather than leaving a reader to assume otherwise.
+    """
+    step_types = {"MCT": "Mapping Task", "MI_TASK": "Mass Ingestion Task"}
+    steps: List[Step] = []
+
+    for task in sorted(integration.tasks, key=lambda t: t.name):
+        steps.append(Step(
+            seq="", title=task.name,
+            step_type=step_types.get(task.task_type, task.task_type or "Task"),
+            task_name=task.name, task=task,
+        ))
+
+    # A mapping exported on its own has no task to run it. Wrap it so the
+    # renderers see the shape they see everywhere else; the wrapper is
+    # scaffolding, not an asset, so it is deliberately not added to
+    # integration.tasks - the Parse Report should still say zero tasks.
+    already = {id(t.mapping) for t in integration.tasks if t.mapping}
+    for mapping in sorted(integration.mappings, key=lambda m: m.name):
+        if id(mapping) in already:
+            continue
+        steps.append(Step(
+            seq="", title=mapping.name, step_type="Mapping",
+            task=Task(name=mapping.name, task_type="MAPPING", guid=mapping.guid,
+                      description=mapping.description, mapping=mapping),
+        ))
+
+    if not steps:
+        return
+
+    for number, step in enumerate(steps, start=1):
+        step.seq = str(number)
+    integration.steps = steps
+
+    warnings.append(
+        f"This package contains no taskflow, so there is no execution order to "
+        f"report. The {len(steps)} asset(s) it does contain are documented "
+        f"below in name order - do not read that as the order they run in."
+    )
+
+
+def _package_name(package: ExportPackage, integration: Integration) -> str:
+    """What to call a package that has no taskflow to take a name from.
+
+    IICS stamps the export with the name of whatever was selected, suffixed
+    with a timestamp, so that is the most faithful answer available.
+    """
+    exported = str(package.metadata.get("name", "") or "")
+    exported = re.sub(r"-\d{10,}$", "", exported)
+    if exported:
+        return exported
+    if len(integration.tasks) == 1:
+        return integration.tasks[0].name
+    if len(integration.mappings) == 1:
+        return integration.mappings[0].name
+    return package.project_name or ""
 
 
 def _mapping_name_for(task_name: str) -> str:
@@ -106,6 +181,16 @@ def _derive_defaults(integration: Integration) -> None:
     # Only the taskflow's own description describes the integration. A step's
     # description describes that step, so it is left for AI or a human rather
     # than passed off as the integration's business purpose.
+    #
+    # The exception is a package that is a single asset: there the asset's
+    # description is not one step's description among many, it is the whole of
+    # what this package does.
+    if not meta.description and len(integration.steps) == 1:
+        only = integration.steps[0]
+        described = only.task.description if only.task else ""
+        meta.description = described or (
+            only.task.mapping.description if only.task and only.task.mapping else ""
+        )
 
     if not meta.display_name:
         meta.display_name = meta.taskflow_name

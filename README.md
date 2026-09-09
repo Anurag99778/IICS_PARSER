@@ -195,6 +195,16 @@ missing is visible even when no individual step reported a problem. Anything
 short of complete names the specific objects. Read this first on a new
 integration; it is the fastest way to know whether the analysis is whole.
 
+### Packages with no taskflow
+
+Not every integration is an orchestration. IICS exports a single asset as
+readily as a whole taskflow, so a package is often just a mapping, or a mapping
+task and the mapping it runs. Those are documented the same way — sources,
+targets, expressions, column lineage, field grids and the mapping diagram all
+come out — with one difference the Parse Report states plainly: with no
+taskflow there is no execution order, so the assets are listed in **name
+order**, which must not be read as the order they run in.
+
 ### Handling integrations this parser has not seen
 
 Transformation types are resolved through each mapping file's own
@@ -210,7 +220,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 87 tests
+python -m pytest        # 99 tests (67 of them need a package in samples/)
 ```
 
 ## Requirements
