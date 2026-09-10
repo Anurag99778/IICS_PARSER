@@ -3,10 +3,12 @@
 Turns an Informatica IICS export package (`.zip`) into the analysis documents
 used for the Oracle Integration Cloud migration:
 
-* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field Values* and
-  *Source & Target Fields* sheets, plus a *Parse Report* with a coverage table
+* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field Values*,
+  *Source & Target Fields* and *Connection Details* sheets, plus a *Parse
+  Report* with a coverage table
 * **`<taskflow>_Analysis.docx`** — the process document, built on your own
-  template, with the mapping diagrams embedded automatically
+  branded template: its cover page, header artwork and contents block are kept
+  and its front tables filled in, with the mapping diagrams embedded
 
 What used to be a day of digging through the IICS UI is a single command — or a
 single upload, if you deploy the web front end.
@@ -117,6 +119,7 @@ Almost everything. The export package is far more structured than it looks:
 | Every file-operation property (rename suffix, PGP key, …) | `taskActions[].properties`, read generically |
 | **Mapping diagrams in the Word doc** | the preview JPEG inside each `.DTEMPLATE` |
 | Notification recipients, subjects, bodies | `emailNotificationService` parameters |
+| Schema per leg, on the Connection Details sheet | `object.dbSchema`, else the connection's schema/user |
 | Error handling | taskflow `<catch>` handlers |
 
 ### What it cannot know
@@ -129,6 +132,11 @@ in the web app). Precedence is:
 ```
 overrides.yaml  >  AI draft  >  parsed value
 ```
+
+The **Integration Purpose/Objective** section is the clearest case: it takes
+the taskflow's own description, an override, or the GPT draft — and shows
+`[to be confirmed]` when none of those supplied one, rather than letting the
+standing migration boilerplate underneath it pass for a purpose.
 
 Anything unfilled appears as a red `[to be confirmed]` in the Word document
 rather than being quietly invented, and every AI-drafted field is listed in the
@@ -220,7 +228,7 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 99 tests (67 of them need a package in samples/)
+python -m pytest        # 116 tests (67 of them need a package in samples/)
 ```
 
 ## Requirements

@@ -24,9 +24,11 @@ from .. import coverage
 from ..coverage import CoverageLine
 from ..model.ir import Integration
 from .rows import (
+    CONNECTION_DETAIL_COLUMNS,
     FIELD_LEVEL_COLUMNS,
     MAPPING_DETAIL_COLUMNS,
     OBJECT_FIELD_COLUMNS,
+    connection_detail_rows,
     field_level_rows,
     mapping_detail_rows,
     object_field_rows,
@@ -80,6 +82,7 @@ def clean_cell(value: object) -> Tuple[Optional[str], Optional[str]]:
 DETAIL_SHEET = "Mapping Details"
 FIELD_SHEET = "Field Values"
 OBJECT_SHEET = "Source & Target Fields"
+CONNECTION_SHEET = "Connection Details"
 REPORT_SHEET = "Parse Report"
 
 #: Per-sheet column widths, in the order of the column lists.
@@ -87,6 +90,7 @@ _WIDTHS = {
     DETAIL_SHEET: [7, 26, 18, 38, 38, 18, 40, 34, 26, 32, 40, 26, 32, 44, 40],
     FIELD_SHEET: [7, 26, 18, 38, 38, 26, 20, 52, 34, 28],
     OBJECT_SHEET: [7, 26, 40, 32, 12, 28, 12, 10, 8, 13, 9, 6, 32, 26],
+    CONNECTION_SHEET: [7, 30, 40, 26, 30, 40, 30, 40],
 }
 
 #: Every sheet starts in column A - no decorative leading gutter.
@@ -111,8 +115,10 @@ def write_workbook(integration: Integration, path: Path) -> Path:
     _sheet(wb, FIELD_SHEET, title, FIELD_LEVEL_COLUMNS, fields, notes)
     objects = object_field_rows(integration)
     _sheet(wb, OBJECT_SHEET, title, OBJECT_FIELD_COLUMNS, objects, notes)
+    connections = connection_detail_rows(integration)
+    _sheet(wb, CONNECTION_SHEET, title, CONNECTION_DETAIL_COLUMNS, connections, notes)
     _report_sheet(wb, integration, notes,
-                  coverage.audit(integration, detail, fields, objects))
+                  coverage.audit(integration, detail, fields, objects, connections))
 
     wb.save(path)
     return path

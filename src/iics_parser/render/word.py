@@ -17,6 +17,8 @@ from typing import Iterable, List, Optional, Sequence
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from ..model.ir import Integration, Task
@@ -25,6 +27,9 @@ from ..parse.mapping import flow_string
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "analysis_template.docx"
 
 PLACEHOLDER = "[to be confirmed]"
+
+#: A section break lives on the last paragraph of its section, not at body level.
+_SECTION_BREAK = qn("w:pPr") + "/" + qn("w:sectPr")
 
 _KEY_VALUE_STYLE = "Grid Table 1 Light"
 _TABLE_STYLE = "Table Grid"
@@ -39,10 +44,13 @@ def write_document(integration: Integration, path: Path,
 
     template = Path(template) if template else TEMPLATE
     doc = Document(str(template)) if template.exists() else Document()
-    _clear_body(doc)
 
     meta = integration.meta
-    _build(doc, integration, meta)
+    kept_front_matter = _keep_front_matter(doc)
+    if kept_front_matter:
+        _fill_front_matter(doc, integration, meta)
+    _build(doc, integration, meta, front_matter_kept=kept_front_matter)
+    _refresh_fields_on_open(doc)
 
     doc.save(path)
     return path
@@ -50,40 +58,36 @@ def write_document(integration: Integration, path: Path,
 
 # ------------------------------------------------------------------ sections
 
-def _build(doc: Document, integration: Integration, meta) -> None:
+def _build(doc: Document, integration: Integration, meta,
+           front_matter_kept: bool = False) -> None:
     name = meta.display_name or meta.taskflow_name
 
-    _para(doc, "Document Details:", bold=True)
-    _kv_table(doc, [
-        ("Document Type", "Process Document"),
-        ("IICS Architecture", "Informatica Intelligent Cloud Services"),
-        ("OIC Architecture", "Oracle Integration Cloud"),
-        ("Integration Name", name),
-        ("Business Process", _or_placeholder(meta.business_process, "IICS to OIC Migration")),
-        ("Business Process Name", _or_placeholder(meta.business_process_name)),
-        ("Upstream App Owner", _or_placeholder(meta.upstream_app_owner)),
-        ("Downstream App Owner", _or_placeholder(meta.downstream_app_owner)),
-    ], style=_KEY_VALUE_STYLE)
+    # A branded template carries its own cover page, and it has already been
+    # kept and filled in. Only build this when there was none to keep.
+    if not front_matter_kept:
+        _para(doc, "Document Details:", bold=True)
+        _kv_table(doc, list(_document_details(integration, meta).items()),
+                  style=_KEY_VALUE_STYLE)
 
-    _para(doc, "")
-    _para(doc, "Version History:", bold=True)
-    _grid(
-        doc,
-        ["Version", "Create / Modified Date", "Version Scope", "Owner/Changed by"],
-        [[meta.version_label or "1.0", _date(meta.modified_date or meta.created_date),
-          "1", meta.modified_by or meta.created_by or PLACEHOLDER]],
-        style=_ACCENT_STYLE,
-    )
+        _para(doc, "")
+        _para(doc, "Version History:", bold=True)
+        _grid(
+            doc,
+            ["Version", "Create / Modified Date", "Version Scope", "Owner/Changed by"],
+            [[meta.version_label or "1.0",
+              _date(meta.modified_date or meta.created_date),
+              "1", meta.modified_by or meta.created_by or PLACEHOLDER]],
+            style=_ACCENT_STYLE,
+        )
 
-    _para(doc,
-          "Validity: The information submitted in this document will be valid "
-          "for a period of 30 days from the Response Date",
-          style="Body Text")
+        _para(doc,
+              "Validity: The information submitted in this document will be valid "
+              "for a period of 30 days from the Response Date",
+              style="Body Text")
 
     doc.add_heading("IICS 'AS-IS' Status", level=1)
     doc.add_heading("Integration Purpose/Objective:", level=1)
-    _para(doc, "Analysis and migration of all IICS (Informatica Intelligent Cloud "
-               "Services) Integrations to OIC (Oracle Integration Cloud).")
+    _purpose_section(doc, meta)
 
     doc.add_heading("AS IS Analysis", level=2)
 
@@ -308,6 +312,21 @@ def _ordered_tasks(integration: Integration) -> List[Task]:
 
 # -------------------------------------------------------------- content bits
 
+def _purpose_section(doc: Document, meta) -> None:
+    """What this particular integration is for, then the migration objective.
+
+    The first paragraph is the one thing an export package cannot state in
+    business terms, so it comes from the taskflow's own description, from
+    overrides, or from the AI draft - and is a visible placeholder when none of
+    those supplied it, rather than being quietly replaced by the boilerplate
+    underneath it.
+    """
+    _para(doc, _or_placeholder(meta.description))
+    _para(doc, "")
+    _para(doc, "Analysis and migration of all IICS (Informatica Intelligent Cloud "
+               "Services) Integrations to OIC (Oracle Integration Cloud).")
+
+
 def _data_flow(doc: Document, integration: Integration) -> None:
     """Embed the mapping preview images Informatica ships in the package."""
     added = 0
@@ -414,6 +433,53 @@ def _derive_integration_type(integration: Integration) -> str:
 
 # --------------------------------------------------------------------- writer
 
+def _keep_front_matter(doc: Document) -> bool:
+    """Keep the template's cover page and contents; clear the rest.
+
+    A branded template puts its cover in a section of its own, and that
+    section is defined by a break carried on the *last paragraph of the
+    section* - not by a top-level element. Deleting every block, which is what
+    this used to do, therefore deletes the section too, and the cover artwork
+    lives in that section's own header. The front page vanished.
+
+    So: find the first section break, keep everything up to it, and keep the
+    leading table-of-contents block after it. Returns False when the template
+    has no cover section, in which case the whole document is built here.
+    """
+    body = doc.element.body
+    children = list(body)
+
+    end_of_cover = None
+    for index, child in enumerate(children):
+        if child.tag == qn("w:p") and child.find(_SECTION_BREAK) is not None:
+            end_of_cover = index
+            break
+
+    if end_of_cover is None:
+        _clear_body(doc)
+        return False
+
+    # Past the break, a contents block and the blank lines around it still
+    # belong to the front matter. Real content starts at the first paragraph
+    # with text, or the first table.
+    cut = end_of_cover + 1
+    while cut < len(children):
+        child = children[cut]
+        if child.tag == qn("w:sdt"):          # table of contents
+            cut += 1
+            continue
+        if child.tag == qn("w:p") and not _text_of(child).strip():
+            cut += 1
+            continue
+        break
+
+    for child in children[cut:]:
+        if child.tag.endswith("}sectPr"):
+            continue
+        body.remove(child)
+    return True
+
+
 def _clear_body(doc: Document) -> None:
     """Remove template content, keeping styles, section and page setup."""
     body = doc.element.body
@@ -421,6 +487,99 @@ def _clear_body(doc: Document) -> None:
         if child.tag.endswith("}sectPr"):
             continue
         body.remove(child)
+
+
+def _fill_front_matter(doc: Document, integration: Integration, meta) -> None:
+    """Put this integration's values into the template's own front tables.
+
+    The template's tables are kept rather than rebuilt so they keep the house
+    styling; only the values change. A template whose tables differ from the
+    expected labels is simply left alone - a wrong value would be worse than
+    an unfilled one.
+    """
+    for table in doc.tables:
+        head = _cell_text(table, 0, 0)
+        if head == "Document Type":
+            _fill_labelled(table, _document_details(integration, meta))
+        elif head == "Version":
+            _fill_version_history(table, meta)
+
+
+def _document_details(integration: Integration, meta) -> dict:
+    name = meta.display_name or meta.taskflow_name
+    return {
+        "Document Type": "Process Document",
+        "IICS Architecture": "Informatica Intelligent Cloud Services",
+        "OIC Architecture": "Oracle Integration Cloud",
+        "Integration Name": name,
+        "Business Process": _or_placeholder(meta.business_process,
+                                            "IICS to OIC Migration"),
+        "Business Process Name": _or_placeholder(meta.business_process_name),
+        "Upstream App Owner": _or_placeholder(meta.upstream_app_owner),
+        "Downstream App Owner": _or_placeholder(meta.downstream_app_owner),
+    }
+
+
+def _fill_labelled(table, values: dict) -> None:
+    """Overwrite the value column of every row whose label we recognise.
+
+    Longest label first: "Business Process Name" also starts with "Business
+    Process", and matching the shorter one would put the wrong value in it.
+    """
+    known_labels = sorted(values, key=len, reverse=True)
+    for row in table.rows:
+        if len(row.cells) < 2:
+            continue
+        label = row.cells[0].text.strip().lower()
+        for known in known_labels:
+            if label.startswith(known.lower()):
+                _set_cell(row.cells[1], values[known])
+                break
+
+
+def _fill_version_history(table, meta) -> None:
+    if len(table.rows) < 2:
+        return
+    cells = table.rows[1].cells
+    for cell, value in zip(cells, [
+        meta.version_label or "1.0",
+        _date(meta.modified_date or meta.created_date),
+        "1",
+        meta.modified_by or meta.created_by or PLACEHOLDER,
+    ]):
+        _set_cell(cell, value)
+    # Any further rows are the template's own history for another document.
+    for row in table.rows[2:]:
+        for cell in row.cells:
+            _set_cell(cell, "")
+
+
+def _refresh_fields_on_open(doc: Document) -> None:
+    """Ask Word to rebuild field content - the table of contents - on open.
+
+    The contents block is kept from the template, so without this it would
+    show the page numbers of whatever document the template came from.
+    """
+    try:
+        settings = doc.settings.element
+    except (AttributeError, KeyError):        # a Document() with no settings part
+        return
+    if settings.find(qn("w:updateFields")) is not None:
+        return
+    update = OxmlElement("w:updateFields")
+    update.set(qn("w:val"), "true")
+    settings.append(update)
+
+
+def _cell_text(table, row: int, column: int) -> str:
+    try:
+        return table.rows[row].cells[column].text.strip()
+    except IndexError:
+        return ""
+
+
+def _text_of(element) -> str:
+    return "".join(node.text or "" for node in element.iter(qn("w:t")))
 
 
 def _para(doc: Document, text: str, *, bold: bool = False, italic: bool = False,

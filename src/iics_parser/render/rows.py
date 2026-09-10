@@ -26,6 +26,13 @@ FIELD_LEVEL_COLUMNS = [
     "Input fields", "Values", "Path", "Notes",
 ]
 
+#: Where each leg of the integration reads from and writes to, on one row.
+CONNECTION_DETAIL_COLUMNS = [
+    "S. No", "Taskflow", "Mapping Name", "Schema",
+    "Source Connection", "Source Object",
+    "Target Connection", "Target Object",
+]
+
 #: The designer's Source Fields / Target Fields grids, plus the Field Mapping
 #: tab's "Mapped Field" column, in one place.
 OBJECT_FIELD_COLUMNS = [
@@ -414,6 +421,95 @@ def field_level_rows(integration: Integration) -> List[List[str]]:
                 transformation, name, value, path, note,
             ])
     return rows
+
+
+def connection_detail_rows(integration: Integration) -> List[List[str]]:
+    """Rows for the 'Connection Details' sheet.
+
+    One row per source -> target leg, and one per lookup, with every cell
+    filled: unlike the Mapping Details sheet, which blanks repeated values so a
+    long sheet stays readable, each row here has to stand on its own so the
+    sheet can be sorted and filtered by connection.
+    """
+    schemas = {c.name: c.schema_label for c in integration.connections}
+    rows: List[List[str]] = []
+
+    for step in integration.steps:
+        task = step.task
+        if task is None:
+            continue
+
+        if task.task_type == "MI_TASK":
+            src, tgt = task.source, task.target
+            rows.append([
+                step.seq, step.title, "", "",
+                src.connection_display if src else "",
+                _file_endpoint(src),
+                tgt.connection_display if tgt else "",
+                _file_endpoint(tgt),
+            ])
+            continue
+
+        mapping = task.mapping
+        if mapping is None:
+            continue
+
+        reach = _reachable_targets(mapping)
+        for source in mapping.sources:
+            for target in reach.get(source.name) or [None]:
+                rows.append([
+                    step.seq, step.title, mapping.name,
+                    _schema_label(schemas, source, target),
+                    source.connection_display, _object_label(source),
+                    target.connection_display if target else "",
+                    _object_label(target) if target else "",
+                ])
+
+        # Targets nothing feeds, then lookups - each reads through a connection
+        # of its own, which a migration has to account for.
+        covered = {t.name for ts in reach.values() for t in ts}
+        for target in mapping.targets:
+            if target.name not in covered:
+                rows.append([
+                    step.seq, step.title, mapping.name,
+                    _schema_label(schemas, None, target),
+                    "", "", target.connection_display, _object_label(target),
+                ])
+        for lookup in mapping.lookups:
+            rows.append([
+                step.seq, step.title, f"{mapping.name} (Lookup {lookup.name})",
+                _schema_label(schemas, lookup, None),
+                lookup.connection_display, _object_label(lookup), "", "",
+            ])
+    return rows
+
+
+def _file_endpoint(side) -> str:
+    """A mass-ingestion directory, with the pattern that selects files in it."""
+    if side is None:
+        return ""
+    parts = [side.directory] if side.directory else []
+    if getattr(side, "pattern_label", ""):
+        parts.append(f"File pattern: {side.pattern_label}")
+    return "\n".join(parts)
+
+
+def _schema_label(schemas: Dict[str, str], source: Optional[Transformation],
+                  target: Optional[Transformation]) -> str:
+    """The schema this leg works in.
+
+    Usually one schema serves both ends, and that is what an analyst writes
+    down. Where the two differ, both are named rather than picking one and
+    quietly losing the other.
+    """
+    names = []
+    for tx in (source, target):
+        if tx is None:
+            continue
+        name = tx.db_schema or schemas.get(tx.connection_name, "")
+        if name and name not in names:
+            names.append(name)
+    return " → ".join(names)
 
 
 def object_field_rows(integration: Integration) -> List[List[str]]:

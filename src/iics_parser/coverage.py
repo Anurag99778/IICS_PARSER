@@ -45,15 +45,17 @@ class CoverageLine:
 def audit(integration: Integration,
           detail_rows: Sequence[Sequence[str]],
           field_rows: Sequence[Sequence[str]],
-          object_rows: Sequence[Sequence[str]] = ()) -> List[CoverageLine]:
+          object_rows: Sequence[Sequence[str]] = (),
+          connection_rows: Sequence[Sequence[str]] = ()) -> List[CoverageLine]:
     """Compare what the package holds against what the sheets show."""
     detail_text = _text_of(detail_rows)
     field_text = _text_of(field_rows)
     object_text = _text_of(object_rows)
-    both = detail_text | field_text | object_text
+    both = detail_text | field_text | object_text | _text_of(connection_rows)
     # Multi-word values (option labels) are never whole tokens, so they need a
     # substring check against the raw rendered text rather than the token set.
-    blob = "\n".join((_blob(detail_rows), _blob(field_rows), _blob(object_rows)))
+    blob = "\n".join((_blob(detail_rows), _blob(field_rows), _blob(object_rows),
+                      _blob(connection_rows)))
 
     lines: List[CoverageLine] = []
 

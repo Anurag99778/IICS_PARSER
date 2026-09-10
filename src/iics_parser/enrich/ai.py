@@ -37,7 +37,14 @@ def model_name() -> str:
 
 #: Fields the model may draft, with the guidance shown to it.
 DRAFTABLE = {
-    "description": "One or two sentences on what this integration does, in business terms.",
+    # This becomes the Integration Purpose/Objective section of the document,
+    # so it has to read as prose a business reader can act on - not a
+    # restatement of the step list they can already see.
+    "description": (
+        "The integration's purpose and objective: two or three sentences saying what "
+        "business outcome it produces, what data moves and between which systems. "
+        "Name the systems and objects from the facts. Do not list the steps."
+    ),
     "integration_type": "Classification, e.g. 'Batch taskflow orchestrating mapping tasks with file delivery'.",
     "integration_pattern": "One of: Sync, Async, Batch, File, or a short combination.",
     "trigger_type": "One of: Schedule, Event, Ad Hoc - or 'Unknown' if the package gives no evidence.",
