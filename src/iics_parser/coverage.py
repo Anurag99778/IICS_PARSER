@@ -87,7 +87,7 @@ def audit(integration: Integration,
         for tx in mapping.sources + mapping.targets:
             label = tx.object_name or tx.name
             endpoints.append(label)
-            if label and label not in both and (tx.custom_query or "") not in both:
+            if label and label not in blob and (tx.custom_query or "") not in blob:
                 missing_endpoints.append(f"{mapping.name} · {tx.kind} {label}")
     lines.append(CoverageLine("Source/target objects", len(endpoints),
                               len(endpoints) - len(missing_endpoints), missing_endpoints))
@@ -115,7 +115,10 @@ def audit(integration: Integration,
                               len(pairs) - len(missing_pairs), missing_pairs))
 
     # 7. Connections. One never mentioned is exported but unused by this flow.
-    unused_conns = [c.name for c in integration.connections if c.name not in both]
+    #    Checked against the rendered text rather than the token set: a name
+    #    like "Cloud Integration Hub" is several tokens and never matches as
+    #    one, so the token set reported it missing while it was plainly there.
+    unused_conns = [c.name for c in integration.connections if c.name not in blob]
     lines.append(CoverageLine(
         "Connections referenced", len(integration.connections),
         len(integration.connections) - len(unused_conns), unused_conns,

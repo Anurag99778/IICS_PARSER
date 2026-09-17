@@ -21,7 +21,8 @@ _CLASS_INFO = {
     "8": "com.informatica.metadata.common.template.tx.tmpltarget.TmplTarget",
     "9": "com.informatica.metadata.common.template.tx.tmplexpression.TmplExpression",
 }
-_SOURCE, _TARGET, _EXPRESSION = 7, 8, 9
+_CLASS_INFO["11"] = "com.informatica.metadata.common.template.tx.tmplsorter.TmplSorter"
+_SOURCE, _TARGET, _EXPRESSION, _SORTER = 7, 8, 9, 11
 
 #: A real .DTEMPLATE carries the designer's preview of the mapping, which the
 #: Word document embeds. A 1x1 JPEG stands in for it - small, but a genuine
@@ -44,8 +45,14 @@ def connection(name: str = "cn_WAREHOUSE", conn_type: str = "Oracle",
 
 def mapping_graph(source_object: str = "STG_EMPLOYEES",
                   target_object: str = "DW_EMPLOYEES",
-                  connection_guid: str = "CONN0001") -> Dict:
-    """A source -> expression -> target mapping, with a column mapping."""
+                  connection_guid: str = "CONN0001",
+                  with_sorter: bool = False) -> Dict:
+    """A source -> expression -> target mapping, with a column mapping.
+
+    ``with_sorter`` adds a Sorter carrying ticked advanced options - a
+    transformation that is neither an endpoint nor a lookup, and so has no row
+    of its own for its settings to be reported on.
+    """
     adapter = lambda obj: {                                  # noqa: E731
         "connectionId": f"@{connection_guid}",
         "typeSystem": "Oracle",
@@ -61,7 +68,7 @@ def mapping_graph(source_object: str = "STG_EMPLOYEES",
     }
     string_type = {"##SID": "smd:typesystem/string"}
 
-    return {
+    graph = {
         "metadata": {"$$classInfo": dict(_CLASS_INFO)},
         "content": {
             "transformations": [
@@ -88,6 +95,16 @@ def mapping_graph(source_object: str = "STG_EMPLOYEES",
             ],
         },
     }
+    if with_sorter:
+        graph["content"]["transformations"].append({
+            "$$ID": 9, "$$class": _SORTER, "name": "srt_file_output",
+            "sortEntries": [{"fieldName": "EMPLOYEE_ID", "ascending": "true"}],
+            "advancedProperties": [
+                {"name": "Case Sensitive", "value": "true"},
+                {"name": "Null Treated Low", "value": "true"},
+            ],
+        })
+    return graph
 
 
 def write_package(path: Path, *, project: str = "Payroll",
@@ -95,15 +112,18 @@ def write_package(path: Path, *, project: str = "Payroll",
                   task_name: Optional[str] = None,
                   export_name: Optional[str] = None,
                   description: str = "Load employees into the warehouse.",
-                  mapping_guid: str = "MAP00001") -> Path:
+                  mapping_guid: str = "MAP00001",
+                  connection_name: str = "cn_WAREHOUSE",
+                  with_sorter: bool = False) -> Path:
     """Write an export package containing one mapping, and optionally its task.
 
     With ``task_name`` omitted the package is a bare mapping - the case where
     someone exported a single asset out of the IICS UI.
     """
     path = Path(path)
+    conn = connection(name=connection_name)
     objects: List[Dict] = [
-        _exported(connection()["name"], "Connection", "CONN0001", "/SYS"),
+        _exported(conn["name"], "Connection", "CONN0001", "/SYS"),
         _exported(mapping_name, "DTEMPLATE", mapping_guid,
                   f"/Explore/{project}", description),
     ]
@@ -118,14 +138,15 @@ def write_package(path: Path, *, project: str = "Payroll",
             "exportedObjects": objects,
         }))
         pkg.writestr("SYS/cn_WAREHOUSE.Connection.zip",
-                     _asset_zip({"connection.json": json.dumps([connection()])}))
+                     _asset_zip({"connection.json": json.dumps([conn])}))
         pkg.writestr(f"Explore/{project}/{mapping_name}.DTEMPLATE.zip",
                      _asset_zip({
                          "fileRecord.json": json.dumps([
                              {"id": "@3", "type": "IMFOBJECT"},
                              {"id": "@2", "type": "IMAGE"},
                          ]),
-                         "bin/@3.bin": json.dumps(mapping_graph()),
+                         "bin/@3.bin": json.dumps(
+                             mapping_graph(with_sorter=with_sorter)),
                          "bin/@2.bin": PREVIEW_JPEG,
                      }))
         if task_name:

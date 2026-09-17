@@ -289,6 +289,12 @@ def _lookup_filter_note(mapping: Mapping) -> str:
             parts.append(f"Filter ({tx.name}): {tx.advanced_filter}")
         for cond in tx.group_expressions:
             parts.append(f"{tx.kind} ({tx.name}): {cond}")
+        # Checkboxes ticked on a transformation that is neither an endpoint nor
+        # a lookup - a Sorter's "Case Sensitive", say - have nowhere else to be
+        # reported: sources and targets carry theirs on their own row, and
+        # lookups list theirs above.
+        if tx.options and tx.kind != "Lookup":
+            parts.append(f"{tx.kind} ({tx.name}) options: " + ", ".join(tx.options))
 
     # Transformations that shape the data without conditions of their own still
     # belong in the analysis - an Aggregator or Sorter changes the output. Their
