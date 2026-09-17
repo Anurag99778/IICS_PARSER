@@ -168,3 +168,105 @@ def test_documents_are_written_end_to_end(tmp_path):
     rows = [r for r in workbook["Connection Details"].iter_rows(
         min_row=5, values_only=True) if any(v not in (None, "") for v in r)]
     assert rows
+
+
+# ------------------------------------------------------------- cover page
+
+def _cover_paragraphs(path):
+    from docx.oxml.ns import qn
+    document = Document(path)
+    return [("".join(t.text or "" for t in p.findall(qn("w:t")) or []) or
+             "".join(t.text or "" for t in p.iter(qn("w:t"))))
+            for p in document.element.body.iter(qn("w:p"))]
+
+
+def _title_lines(path):
+    """The runs of each cover-title paragraph, as (size, text)."""
+    from docx.oxml.ns import qn
+    out = []
+    for paragraph in Document(path).element.body.iter(qn("w:p")):
+        runs = paragraph.findall(qn("w:r"))
+        texts = ["".join(t.text or "" for t in r.findall(qn("w:t"))) for r in runs]
+        if "IICS to OIC Modernization" in "".join(texts):
+            out.append(texts)
+    return out
+
+
+@pytest.mark.skipif(not TEMPLATE.exists(), reason="template not installed")
+def test_the_cover_names_the_integration(document):
+    """Otherwise every integration arrives with an identical front page."""
+    titles = _title_lines(document)
+    assert titles, "cover title paragraph not found"
+
+    # Word stores the cover twice - DrawingML and a VML fallback - and both
+    # have to say the same thing or the two renderings disagree.
+    assert len(titles) == 2
+    for runs in titles:
+        assert runs[0].strip() == "IICS to OIC Modernization"
+        assert "mt_TEAM_MEMBER_LOAD" in runs[-1]
+
+
+@pytest.mark.skipif(not TEMPLATE.exists(), reason="template not installed")
+def test_the_name_is_on_its_own_line_and_not_title_sized(document):
+    from docx.oxml.ns import qn
+
+    for paragraph in Document(document).element.body.iter(qn("w:p")):
+        runs = paragraph.findall(qn("w:r"))
+        texts = ["".join(t.text or "" for t in r.findall(qn("w:t"))) for r in runs]
+        if "mt_TEAM_MEMBER_LOAD" not in "".join(texts):
+            continue
+        title_run, name_run = runs[0], runs[-1]
+        assert name_run.find(qn("w:br")) is not None, "name runs on after the title"
+
+        def size(run):
+            node = run.find(qn("w:rPr") + "/" + qn("w:sz"))
+            return int(node.get(qn("w:val"))) if node is not None else None
+
+        assert size(name_run) < size(title_run), "a long name at title size overflows"
+        return
+    pytest.fail("no cover paragraph carried the integration name")
+
+
+@pytest.mark.skipif(not TEMPLATE.exists(), reason="template not installed")
+def test_the_cover_is_dated_today_not_when_the_template_was_written(document):
+    from datetime import date
+    today = date.today()
+
+    dates = [p for p in _cover_paragraphs(document)
+             if p.strip().endswith(f"{today:%B %Y}")]
+    assert dates, "the template's own submission date was left in place"
+    assert all(str(today.day) in p for p in dates)
+    assert not any("19th August 2026" in p for p in _cover_paragraphs(document))
+
+
+@pytest.mark.skipif(not TEMPLATE.exists(), reason="template not installed")
+def test_generating_twice_does_not_stack_the_name_up(integration, tmp_path):
+    """Each run starts from the template, so nothing may accumulate."""
+    first = write_document(integration, tmp_path / "one.docx")
+    second = write_document(integration, tmp_path / "two.docx")
+
+    for path in (first, second):
+        for runs in _title_lines(path):
+            assert "".join(runs).count("mt_TEAM_MEMBER_LOAD") == 1
+
+
+def test_a_template_with_no_cover_title_is_left_alone(integration, tmp_path):
+    """An unfamiliar template keeps its own wording rather than being mangled."""
+    plain = tmp_path / "plain.docx"
+    blank = Document()
+    blank.add_paragraph("Some Other Company Template")
+    blank.save(plain)
+
+    path = write_document(integration, tmp_path / "plain_out.docx", template=plain)
+    assert path.exists()
+
+
+def test_a_nameless_integration_does_not_write_an_empty_line(tmp_path):
+    """Guard against decorating the cover with nothing."""
+    zip_path = synthetic.write_package(tmp_path / "x.zip", task_name="mct_X")
+    built = build_integration(ExportPackage.open(zip_path, tmp_path / "x"))
+    built.meta.taskflow_name = built.meta.display_name = ""
+
+    path = write_document(built, tmp_path / "nameless.docx")
+    for runs in _title_lines(path):
+        assert len(runs) == 1, "an empty second line was added to the title"

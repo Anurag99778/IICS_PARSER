@@ -11,6 +11,9 @@ left as a visible ``[to be confirmed]`` placeholder - never silently invented.
 
 from __future__ import annotations
 
+import copy
+import re
+from datetime import date
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
@@ -27,6 +30,18 @@ from ..parse.mapping import flow_string
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "analysis_template.docx"
 
 PLACEHOLDER = "[to be confirmed]"
+
+#: The cover page's series title, which the integration name is added beneath.
+#: A template that titles its cover differently simply keeps its own wording -
+#: the integration is still named in the Document Details table either way.
+_COVER_TITLE = "IICS to OIC Modernization"
+
+#: A submission date on the cover, e.g. "19th August 2026", which is whenever
+#: the template was written and has to become the date of this document.
+_DATED = re.compile(r"\d{1,2}(?:st|nd|rd|th)?\s+"
+                    r"(?:January|February|March|April|May|June|July|August|"
+                    r"September|October|November|December)\s+\d{4}",
+                    re.IGNORECASE)
 
 #: A section break lives on the last paragraph of its section, not at body level.
 _SECTION_BREAK = qn("w:pPr") + "/" + qn("w:sectPr")
@@ -48,6 +63,7 @@ def write_document(integration: Integration, path: Path,
     meta = integration.meta
     kept_front_matter = _keep_front_matter(doc)
     if kept_front_matter:
+        _fill_cover_page(doc, meta)
         _fill_front_matter(doc, integration, meta)
     _build(doc, integration, meta, front_matter_kept=kept_front_matter)
     _refresh_fields_on_open(doc)
@@ -487,6 +503,76 @@ def _clear_body(doc: Document) -> None:
         if child.tag.endswith("}sectPr"):
             continue
         body.remove(child)
+
+
+def _fill_cover_page(doc: Document, meta) -> None:
+    """Name the integration on the cover, and date the document today.
+
+    The template's cover is a series title - "IICS to OIC Modernization" - and
+    a submission date fixed at whenever the template was written. Both are
+    wrong for a generated document: every integration would arrive with the
+    same front page, identifiable only by its filename.
+
+    The cover lives in textboxes that Word stores twice, as DrawingML and as a
+    VML fallback, so this matches on paragraph text and edits every copy the
+    same way rather than reaching into one of them.
+    """
+    name = meta.display_name or meta.taskflow_name
+    for paragraph in doc.element.body.iter(qn("w:p")):
+        text = _text_of(paragraph).strip()
+        if not text:
+            continue
+        if name and text.lower() == _COVER_TITLE.lower():
+            _append_line(paragraph, name)
+        elif _DATED.fullmatch(text):
+            _replace_text(paragraph, _today())
+
+
+def _append_line(paragraph, text: str) -> None:
+    """Add a second line to a paragraph, in the style of its last run."""
+    runs = paragraph.findall(qn("w:r"))
+    if not runs:
+        return
+    source = runs[-1]
+
+    run = copy.deepcopy(source)
+    for child in list(run):
+        if child.tag in (qn("w:t"), qn("w:br")):
+            run.remove(child)
+    # A title is set large; an integration name is long, so it goes on at a
+    # size that will not run off the page.
+    properties = run.find(qn("w:rPr"))
+    if properties is not None:
+        for size in properties.findall(qn("w:sz")) + properties.findall(qn("w:szCs")):
+            try:
+                size.set(qn("w:val"), str(max(18, int(size.get(qn("w:val"))) // 2)))
+            except (TypeError, ValueError):
+                pass
+
+    run.append(OxmlElement("w:br"))
+    node = OxmlElement("w:t")
+    node.text = text
+    node.set(qn("xml:space"), "preserve")
+    run.append(node)
+    source.addnext(run)
+
+
+def _replace_text(paragraph, text: str) -> None:
+    """Put ``text`` in a paragraph whose wording is split across many runs."""
+    nodes = list(paragraph.iter(qn("w:t")))
+    if not nodes:
+        return
+    nodes[0].text = text
+    nodes[0].set(qn("xml:space"), "preserve")
+    for node in nodes[1:]:
+        node.text = ""
+
+
+def _today() -> str:
+    day = date.today()
+    suffix = "th" if 11 <= day.day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(
+        day.day % 10, "th")
+    return f"{day.day}{suffix} {day:%B %Y}"
 
 
 def _fill_front_matter(doc: Document, integration: Integration, meta) -> None:

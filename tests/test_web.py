@@ -1,7 +1,9 @@
 """The web front end: upload a package, get the documents back.
 
-These exercise the app the way a browser does - a real multipart upload of the
-reference package, then following the download links it hands back.
+These exercise the app the way a browser does - a real multipart upload, then
+following the download links it hands back. The package is built in memory, so
+these run in a checkout with no samples/ directory: the web app is what gets
+deployed, and it should not be the part of the suite that silently skips.
 """
 
 from __future__ import annotations
@@ -13,13 +15,20 @@ from pathlib import Path
 
 import pytest
 
-SAMPLE = (Path(__file__).resolve().parent.parent / "samples"
-          / "tf_HUB_CONCUR_EMPLOYEE_DETAILS_OUTBOUND_FIN_I_HR001.zip")
+from . import synthetic
 
 pytest.importorskip("flask")
-pytestmark = pytest.mark.skipif(not SAMPLE.exists(), reason="sample package not present")
 
 PREFIX = "/parserIICS"
+
+
+@pytest.fixture(scope="module")
+def package(tmp_path_factory) -> bytes:
+    """One export package, as the bytes a browser would upload."""
+    path = synthetic.write_package(
+        tmp_path_factory.mktemp("pkg") / "export.zip",
+        project="CIH", mapping_name="m_TEAM_LOAD", task_name="mct_HUB_TEAM_LOAD")
+    return path.read_bytes()
 
 
 @pytest.fixture()
@@ -33,8 +42,9 @@ def client(tmp_path, monkeypatch):
     return web.app.test_client()
 
 
-def _upload(client, name="export.zip", data=None, **extra):
-    payload = {"package": (io.BytesIO(data if data is not None else SAMPLE.read_bytes()), name)}
+def _upload(client, package=None, name="export.zip", data=None, **extra):
+    body = data if data is not None else package
+    payload = {"package": (io.BytesIO(body), name)}
     payload.update(extra)
     return client.post(f"{PREFIX}/", data=payload, content_type="multipart/form-data")
 
@@ -52,8 +62,8 @@ def test_health_check_answers(client):
     assert client.get(f"{PREFIX}/health").get_json()["status"] == "ok"
 
 
-def test_upload_produces_both_documents(client):
-    page = _upload(client)
+def test_upload_produces_both_documents(client, package):
+    page = _upload(client, package)
     assert page.status_code == 200
     body = page.get_data(as_text=True)
     assert "_Analysis.xlsx" in body
@@ -61,9 +71,9 @@ def test_upload_produces_both_documents(client):
     assert "100% coverage" in body
 
 
-def test_generated_files_download(client):
+def test_generated_files_download(client, package):
     import re
-    body = _upload(client).get_data(as_text=True)
+    body = _upload(client, package).get_data(as_text=True)
     links = re.findall(r'href="([^"]*/download/[^"]+)"', body)
     assert len(links) == 2, body[:400]
 
@@ -74,9 +84,9 @@ def test_generated_files_download(client):
         assert got.headers["Content-Disposition"].startswith("attachment")
 
 
-def test_everything_downloads_as_one_zip(client):
+def test_everything_downloads_as_one_zip(client, package):
     import re
-    body = _upload(client).get_data(as_text=True)
+    body = _upload(client, package).get_data(as_text=True)
     bundle = re.search(r'href="([^"]*/bundle/[^"]+\.zip)"', body).group(1)
 
     got = client.get(bundle)
