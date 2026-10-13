@@ -61,6 +61,7 @@ class ExportPackage:
         self.assets: List[Asset] = []
         self.metadata: Dict = {}
         self.warnings: List[str] = []
+        self.unsupported: Dict[str, List[str]] = {}
         self._index()
 
     # ------------------------------------------------------------------ load
@@ -128,6 +129,54 @@ class ExportPackage:
         # readily as whole orchestrations. build.py documents what is there and
         # says what it could not establish, so nothing is warned about here.
 
+        self._audit_unrecognised()
+
+    def _audit_unrecognised(self) -> None:
+        """Name exported objects whose type this parser cannot read.
+
+        Silently skipping an unknown suffix is how a package of the wrong
+        product family produced a workbook of empty sheets that still claimed
+        full coverage: nothing was parsed, so nothing was missing. The export
+        metadata lists what the package is *supposed* to contain, so compare
+        against that rather than against what we happened to recognise.
+        """
+        indexed = {a.name for a in self.assets}
+        unknown: Dict[str, List[str]] = {}
+        for obj in self.listed_objects:
+            name, obj_type = obj.get("objectName", ""), obj.get("objectType", "")
+            if not name or obj_type in _CONTAINER_TYPES or name in indexed:
+                continue
+            unknown.setdefault(obj_type, []).append(name)
+
+        self.unsupported = unknown
+        for obj_type in sorted(unknown):
+            names = sorted(unknown[obj_type])
+            shown = ", ".join(names[:4]) + (" ..." if len(names) > 4 else "")
+            self.warnings.append(
+                f"{len(names)} {obj_type} object(s) could not be read and are "
+                f"absent from this analysis: {shown}"
+            )
+
+        if unknown and not any(a.obj_type in _PARSEABLE_TYPES for a in self.assets):
+            self.warnings.insert(0, (
+                "Nothing in this package could be parsed. It holds "
+                + ", ".join(f"{len(v)} {k}" for k, v in sorted(unknown.items()))
+                + " - these are Application Integration (Process Designer) "
+                "assets, and this parser reads Data Integration assets "
+                "(taskflows, mappings, mapping tasks). The documents below are "
+                "empty for that reason, not because the integration is empty."
+            ))
+
+    @property
+    def listed_objects(self) -> List[Dict[str, str]]:
+        """Objects the package says it contains, from metadata or the CSV."""
+        objs = self.metadata.get("exportedObjects") or []
+        if objs:
+            return objs
+        return [{"objectName": r.get("objectName", ""),
+                 "objectType": r.get("objectType", "")}
+                for r in self.contents_csv]
+
     # ---------------------------------------------------------------- access
 
     def by_type(self, obj_type: str) -> List[Asset]:
@@ -162,6 +211,10 @@ class ExportPackage:
 #: Suffix -> object type. Order matters: longest/most specific first.
 _SUFFIXES = [
     (".TASKFLOW.xml", "TASKFLOW"),
+    (".PROCESS_OBJECT.xml", "PROCESS_OBJECT"),
+    (".PROCESS.xml", "PROCESS"),
+    (".AI_CONNECTION.xml", "AI_CONNECTION"),
+    (".AI_SERVICE_CONNECTOR.xml", "AI_SERVICE_CONNECTOR"),
     (".MI_TASK.dat", "MI_TASK"),
     (".Project.json", "Project"),
     (".DTEMPLATE", "DTEMPLATE"),
@@ -170,6 +223,13 @@ _SUFFIXES = [
     (".HSCHEMA", "HSCHEMA"),
     (".AgentGroup", "AgentGroup"),
 ]
+
+
+#: Object types that are containers, not assets - never "unsupported".
+_CONTAINER_TYPES = {"Folder", "Project"}
+
+#: Types that carry the content the analysis is built from.
+_PARSEABLE_TYPES = {"TASKFLOW", "DTEMPLATE", "MTT", "MI_TASK", "PROCESS"}
 
 
 def _classify(path: Path) -> tuple:

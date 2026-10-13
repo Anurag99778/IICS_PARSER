@@ -361,7 +361,7 @@ def _data_flow(doc: Document, integration: Integration) -> None:
         except Exception:
             _para(doc, f"[preview image could not be embedded: {image.name}]")
     if not added:
-        _para(doc, "No mapping preview images were present in the export package.")
+        _para(doc, _no_diagram_note(integration))
 
 
 def _mapping_section(doc: Document, integration: Integration) -> None:
@@ -381,7 +381,7 @@ def _mapping_section(doc: Document, integration: Integration) -> None:
             if tx.expression_fields:
                 _para(doc, f"{tx.name} ({tx.kind}):", italic=True)
                 for f in tx.expression_fields:
-                    _para(doc, f"{f.name} = {f.expression}", bullet=True)
+                    _para(doc, _expression_line(f), bullet=True)
     if not seen:
         _para(doc, "No mappings were present in the export package.")
 
@@ -750,3 +750,33 @@ def _or_placeholder(*values: str) -> str:
 
 def _date(raw: str) -> str:
     return raw.split("T")[0] if raw else PLACEHOLDER
+
+
+def _expression_line(field) -> str:
+    """One expression bullet.
+
+    A field with an expression is a calculation and reads as one. A field
+    without is a declaration - a process temp field, say - and writing
+    ``name =`` for it would suggest the export had a value this parser failed
+    to read, when there is nothing there to read.
+    """
+    if field.expression:
+        return f"{field.name} = {field.expression}"
+    if field.data_type:
+        return f"{field.name} ({field.data_type})"
+    return field.name
+
+
+def _no_diagram_note(integration: Integration) -> str:
+    """Why this document carries no mapping diagram.
+
+    Data Integration exports ship a preview image per mapping and its absence
+    means extraction failed. Application Integration exports never carry one,
+    so the same sentence would send a reader looking for a problem that is not
+    there.
+    """
+    if any(m.diagram_expected for m in integration.mappings):
+        return "No mapping preview images were present in the export package."
+    return ("This is an Application Integration process; its export carries no "
+            "design-time diagram. The step sequence below, and the Mapping "
+            "Details sheet of the workbook, describe the flow instead.")

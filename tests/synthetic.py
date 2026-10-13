@@ -179,3 +179,163 @@ def _asset_zip(files: Dict[str, str]) -> bytes:
         for name, body in files.items():
             inner.writestr(name, body)
     return buffer.getvalue()
+
+
+# ------------------------------------------- Application Integration packages
+
+#: The repository envelope every Application Integration asset is wrapped in.
+_AI_ENVELOPE = """<?xml version="1.0" encoding="UTF-8"?>
+<aetgt:getResponse xmlns:aetgt="http://schemas.active-endpoints.com/appmodules/repository/2010/10/avrepository.xsd"
+                   xmlns:types1="http://schemas.active-endpoints.com/appmodules/repository/2010/10/avrepository.xsd">
+   <types1:Item>
+      <types1:Name>{name}</types1:Name>
+      <types1:Description>{description}</types1:Description>
+      <types1:VersionLabel>1.0</types1:VersionLabel>
+      <types1:CreatedBy>designer@example.com</types1:CreatedBy>
+      <types1:CreationDate>2024-01-26T19:23:04Z</types1:CreationDate>
+      <types1:ModifiedBy>designer@example.com</types1:ModifiedBy>
+      <types1:ModificationDate>2025-02-20T15:41:45Z</types1:ModificationDate>
+      <types1:PublicationStatus>published</types1:PublicationStatus>
+      <types1:Entry>{body}</types1:Entry>
+      <types1:GUID>{guid}</types1:GUID>
+   </types1:Item>
+</aetgt:getResponse>
+"""
+
+
+def process_xml(name: str = "p_ORDER_OUT",
+                subflow: str = "prcs_log",
+                service_connection: str = "app-ORACLE-Create-PO",
+                service_object: str = "ORACLE_Create_PO",
+                target_connection: str = "app-JDBC-STAGING",
+                target_object: str = "STG_RESPONSE") -> str:
+    """A process in the shape Process Designer exports.
+
+    Covers what the parser has to get right: elements ordered by their link
+    chain rather than document order, a service call nested inside the
+    eventContainer that handles its faults, a decision with a conditional and
+    a default branch, an assignment, and a create carrying column mappings.
+    """
+    body = f"""<process xmlns="http://schemas.active-endpoints.com/appmodules/screenflow/2010/10/avosScreenflow.xsd"
+            GUID="PROC0001" displayName="{name}" name="{name}">
+   <input><parameter description="" name="XML_Input" type="xml"/></input>
+   <tempFields>
+      <field description="" name="tmp_payload" type="string"/>
+      <field description="" name="tmp_status" type="string"/>
+   </tempFields>
+   <flow id="flow-main">
+      <start id="n-start"><link id="l0" targetId="n-assign"/></start>
+      <create id="n-create">
+         <title>crt_{target_object}</title>
+         <entityName>{target_connection}:{target_object}</entityName>
+         <createInput>
+            <parameter name="ID" source="field" updatable="true">temp.tmp_payload</parameter>
+            <parameter name="STATUS" source="field" updatable="true">temp.tmp_status</parameter>
+         </createInput>
+      </create>
+      <assignment id="n-assign">
+         <title>asgn_payload</title>
+         <operation source="formula" to="temp.tmp_payload">
+            <expression language="XQuery">util:toXML($input.XML_Input)</expression>
+         </operation>
+         <operation source="field" to="temp.tmp_status">output.status</operation>
+         <link id="l1" targetId="n-event"/>
+      </assignment>
+      <eventContainer id="n-event">
+         <service id="n-service">
+            <title>srv_call_oracle</title>
+            <serviceName>{service_connection}:{service_object}</serviceName>
+            <serviceInput>
+               <parameter name="PAYLOAD" source="field">temp.tmp_payload</parameter>
+            </serviceInput>
+         </service>
+         <flow id="flow-fault">
+            <subflow id="n-sub">
+               <title>{subflow}</title>
+               <subflowGUID>SUB00001</subflowGUID>
+               <subflowPath>{subflow}</subflowPath>
+               <runForEach>false</runForEach>
+               <input>
+                  <parameter name="in_detail" source="constant" updatable="true">Oracle call failed</parameter>
+               </input>
+               <outputDef/>
+            </subflow>
+         </flow>
+         <link id="l2" targetId="n-decide"/>
+      </eventContainer>
+      <container id="n-decide" type="exclusive">
+         <title>dec_status</title>
+         <flow id="flow-ok">
+            <throw id="n-throw">
+               <title>Throw 1</title>
+               <throwInput>
+                  <parameter name="code" source="field" updatable="true">temp.tmp_status</parameter>
+               </throwInput>
+            </throw>
+         </flow>
+         <flow id="flow-else"/>
+         <link id="l3" targetId="flow-ok" type="containerLink">
+            <condition source="formula">
+               <function name="set"><arg name="field">{{$temp.tmp_status}}</arg></function>
+            </condition>
+         </link>
+         <link id="l4" targetId="n-create" type="containerLink"/>
+      </container>
+      <end id="n-end"/>
+   </flow>
+</process>"""
+    return _AI_ENVELOPE.format(name=name, description="Outbound order process.",
+                               body=body, guid="PROC0001")
+
+
+def ai_connection_xml(name: str = "app-JDBC-STAGING",
+                      url: str = "jdbc:oracle:thin:@//db.example.internal:1521/STG",
+                      username: str = "STAGING1") -> str:
+    body = f"""<connection xmlns="http://schemas.informatica.com/socrates/data-services/2014/04/avosConnections.xsd"
+            displayName="{name}" label="{name}" name="{name}">
+   <description>Staging database</description>
+   <agent>AGENT01</agent>
+   <attributes>
+      <attribute encrypted="false" name="JDBC Connection URL" value="{url}"/>
+      <attribute encrypted="false" name="Username" value="{username}"/>
+      <attribute encrypted="false" name="Schema" value=""/>
+      <attribute encrypted="true" name="Password" value=""/>
+   </attributes>
+</connection>"""
+    return _AI_ENVELOPE.format(name=name, description="Staging database",
+                               body=body, guid="CONNAI01")
+
+
+def write_process_package(path: Path, *, project: str = "Orders",
+                          process_name: str = "p_ORDER_OUT",
+                          subflow: str = "prcs_log",
+                          with_connection: bool = True) -> Path:
+    """Write an Application Integration export: a process, its subprocess and
+    optionally the connection definition one of them uses."""
+    path = Path(path)
+    folder = f"/Explore/{project}"
+    objects: List[Dict] = [
+        _exported(process_name, "PROCESS", "PROC0001", folder,
+                  "Outbound order process."),
+        _exported(subflow, "PROCESS", "SUB00001", folder, "Shared logger."),
+    ]
+    if with_connection:
+        objects.append(_exported("app-JDBC-STAGING", "AI_CONNECTION",
+                                 "CONNAI01", folder))
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as pkg:
+        pkg.writestr("exportMetadata.v2.json", json.dumps({
+            "name": f"{process_name}-1791572657646",
+            "sourceOrgId": "ORG1", "sourceOrgName": "ACME_DEV",
+            "exportedObjects": objects,
+        }))
+        pkg.writestr(f"Explore/{project}/{process_name}.PROCESS.xml",
+                     process_xml(name=process_name, subflow=subflow))
+        # The subprocess calls nothing, so it is unambiguously not the root.
+        pkg.writestr(f"Explore/{project}/{subflow}.PROCESS.xml",
+                     process_xml(name=subflow, subflow="",
+                                 target_object="STG_LOG"))
+        if with_connection:
+            pkg.writestr(f"Explore/{project}/app-JDBC-STAGING.AI_CONNECTION.xml",
+                         ai_connection_xml())
+    return path

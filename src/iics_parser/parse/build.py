@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..extract.package import ExportPackage
-from ..model.ir import Integration, Step, Task
+from ..model.ir import Connection, Integration, Step, Task
 from . import assets as asset_parsers
 from .mapping import parse_mapping
+from .process import parse_ai_connection, parse_process
 from .taskflow import parse_taskflow
 
 
@@ -19,6 +20,14 @@ def build_integration(package: ExportPackage,
     integration = Integration()
     integration.warnings.extend(package.warnings)
     warnings = integration.warnings
+
+    # An Application Integration export shares none of its vocabulary with a
+    # Data Integration one, so it is read by its own parser rather than by
+    # threading a second shape through every step below.
+    if package.by_type("PROCESS") and not _has_data_integration_assets(package):
+        _build_from_processes(package, integration, warnings)
+        _derive_defaults(integration)
+        return integration
 
     # 1. Connections first - mappings resolve their adapters against these.
     for asset in package.by_type("Connection"):
@@ -244,3 +253,141 @@ def _derive_defaults(integration: Integration) -> None:
         meta.current_status = (
             "Active" if meta.publication_status == "published" else meta.publication_status
         )
+
+
+# ------------------------------------------------- Application Integration
+
+def _has_data_integration_assets(package: ExportPackage) -> bool:
+    return any(package.by_type(t) for t in ("TASKFLOW", "DTEMPLATE", "MTT", "MI_TASK"))
+
+
+def _build_from_processes(package: ExportPackage,
+                          integration: Integration,
+                          warnings: List[str]) -> None:
+    """Document a package of Application Integration processes.
+
+    The package holds the process that was exported plus every process it
+    calls. The exported one becomes the integration; the others are its
+    subprocesses and are documented after it, each step labelled with the
+    process it belongs to so a reader can tell the shared logging routines
+    from the integration's own flow.
+    """
+    for asset in package.by_type("AI_CONNECTION"):
+        conn = parse_ai_connection(asset.path)
+        if conn:
+            integration.connections.append(conn)
+        else:
+            warnings.append(f"{asset.name}: could not read connection definition")
+
+    processes = package.by_type("PROCESS")
+    root = _root_process(package, processes, warnings)
+    others = [p for p in processes if p is not root]
+
+    meta, steps, mappings, tasks = parse_process(root.path, warnings)
+    integration.meta = meta
+    integration.steps = steps
+    integration.mappings = mappings
+    integration.tasks = tasks
+
+    # Shared subprocesses, each continuing the sequence under its own label.
+    for offset, asset in enumerate(sorted(others, key=lambda a: a.name), start=1):
+        sub_meta, sub_steps, sub_mappings, sub_tasks = parse_process(
+            asset.path, warnings)
+        if not sub_steps:
+            continue
+        for step in sub_steps:
+            step.seq = f"S{offset}.{step.seq}"
+            step.branch = step.branch or asset.name
+            step.depth += 1
+        integration.steps.extend(sub_steps)
+        integration.mappings.extend(sub_mappings)
+        integration.tasks.extend(sub_tasks)
+
+    integration.meta.project = _process_project(root, package)
+    integration.meta.folder = integration.meta.project
+    integration.meta.source_org = package.metadata.get("sourceOrgName", "")
+    if not integration.meta.taskflow_name:
+        integration.meta.taskflow_name = _package_name(package, integration)
+
+    if others:
+        warnings.append(
+            "Subprocesses documented after the main flow, sequence S1-S%d: %s"
+            % (len(others), ", ".join(sorted(a.name for a in others)))
+        )
+
+    _note_unexported_connections(integration, warnings)
+
+
+def _note_unexported_connections(integration: Integration,
+                                 warnings: List[str]) -> None:
+    """Name endpoints the process calls whose connection was left behind.
+
+    A process references its connections by name; exporting the process does
+    not pull them in. Those endpoints are real - they appear in the Connection
+    Details sheet - but their host, schema and credentials are not in this
+    package, and a migration planned without them would be planned short.
+    """
+    defined = {c.name for c in integration.connections}
+    referenced: Dict[str, str] = {}
+    for mapping in integration.mappings:
+        for tx in mapping.transformations:
+            if tx.connection_name and tx.connection_name not in defined:
+                referenced.setdefault(tx.connection_name, tx.object_name)
+
+    if not referenced:
+        return
+
+    for name in sorted(referenced):
+        integration.connections.append(Connection(
+            name=name,
+            conn_type="referenced only - definition not in this export",
+        ))
+    warnings.append(
+        "%d connection(s) are used by this process but their definitions were "
+        "not exported, so host, schema and credentials are unknown: %s"
+        % (len(referenced), ", ".join(sorted(referenced)))
+    )
+
+
+def _root_process(package: ExportPackage,
+                  processes: List,
+                  warnings: List[str]):
+    """The process the package was exported for.
+
+    The export is stamped with the selected asset's name, so that settles it
+    outright. Failing that, the root is the one no other process calls - a
+    subprocess is always referenced by its caller.
+    """
+    exported = re.sub(r"-\d{10,}$", "", str(package.metadata.get("name", "") or ""))
+    for asset in processes:
+        if asset.name == exported:
+            return asset
+
+    called = set()
+    for asset in processes:
+        try:
+            text = asset.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in re.finditer(r"<\w*:?subflowPath>([^<]+)<", text):
+            called.add(match.group(1).strip())
+
+    roots = [a for a in processes if a.name not in called]
+    if len(roots) == 1:
+        return roots[0]
+    if roots:
+        warnings.append(
+            "Package holds %d processes that nothing calls (%s); '%s' was "
+            "documented as the integration"
+            % (len(roots), ", ".join(sorted(a.name for a in roots)), roots[0].name)
+        )
+        return roots[0]
+    return processes[0]
+
+
+def _process_project(asset, package: ExportPackage) -> str:
+    """The project a process lives in, from its path in the export."""
+    path = (asset.obj_path or "").strip("/")
+    if path.startswith("Explore/"):
+        path = path[len("Explore/"):]
+    return path.split("/")[0] if path else package.project_name

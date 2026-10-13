@@ -125,10 +125,11 @@ def audit(integration: Integration,
         note="an unreferenced connection may belong to a step that failed to parse"))
 
     # 8. Mapping diagrams for the Word document.
-    with_preview = [m for m in integration.mappings if m.preview_image]
-    lines.append(CoverageLine("Mapping diagrams extracted", len(integration.mappings),
+    expecting = [m for m in integration.mappings if m.diagram_expected]
+    with_preview = [m for m in expecting if m.preview_image]
+    lines.append(CoverageLine("Mapping diagrams extracted", len(expecting),
                               len(with_preview),
-                              [m.name for m in integration.mappings if not m.preview_image]))
+                              [m.name for m in expecting if not m.preview_image]))
 
     # 9. Ticked checkboxes - easy to lose because each is one boolean.
     options, missing_options = [], []

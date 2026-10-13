@@ -178,6 +178,11 @@ class Mapping:
     transformations: List[Transformation] = field(default_factory=list)
     links: List[Dict[str, str]] = field(default_factory=list)   # {from, to}
     preview_image: str = ""   # path to the extracted mapping preview JPEG
+    #: Whether a design-time diagram could exist for this mapping at all. A
+    #: Data Integration mapping ships a preview JPEG and its absence is a gap;
+    #: a mapping synthesised from a process step never had one, so counting it
+    #: as missing would report a hole that does not exist.
+    diagram_expected: bool = True
 
     def by_kind(self, kind: str) -> List[Transformation]:
         return [t for t in self.transformations if t.kind == kind]
