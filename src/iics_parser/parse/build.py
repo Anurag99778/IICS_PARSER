@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ..extract.package import ExportPackage
-from ..model.ir import Integration, Task
+from ..model.ir import Integration, Step, Task
 from . import assets as asset_parsers
 from .mapping import parse_mapping
 from .taskflow import parse_taskflow
@@ -51,10 +52,17 @@ def build_integration(package: ExportPackage,
         )
         if task.mapping is None and ref:
             warnings.append(
-                f"{task.name}: referenced mapping {ref} not present in package"
+                f"{task.name}: mapping {ref} is not in this package by reference"
+                + (" or by name" if task.name else "")
             )
         integration.tasks.append(task)
         tasks_by_name[task.name] = task
+
+    # A task whose reference and name both missed, in a package holding exactly
+    # one task and one mapping, has only one thing it could possibly run. That
+    # is elimination, not a guess - but say so, because it is not what the
+    # export actually stated.
+    _link_by_elimination(integration, warnings)
 
     for asset in package.by_type("MI_TASK"):
         task = asset_parsers.parse_mass_ingestion(asset)
@@ -90,13 +98,120 @@ def build_integration(package: ExportPackage,
     if not integration.meta.taskflow_name and taskflows:
         integration.meta.taskflow_name = taskflows[0].name
 
+    # 5. A package with no taskflow still has to be documented.
+    if not integration.steps:
+        _document_without_a_taskflow(integration, warnings)
+        if not integration.meta.taskflow_name:
+            integration.meta.taskflow_name = _package_name(package, integration)
+
     _derive_defaults(integration)
     return integration
 
 
+def _document_without_a_taskflow(integration: Integration,
+                                 warnings: List[str]) -> None:
+    """Give a package with no taskflow something to document.
+
+    IICS exports a single asset as readily as a whole orchestration, so a
+    package is often just one mapping, or a mapping task and the mapping it
+    runs, with nothing to sequence them. Every renderer works from steps, so
+    without this the workbook and the document come out empty - which is
+    exactly what a single-mapping export used to produce.
+
+    The assets are listed in name order. That is not execution order, and the
+    Parse Report says so rather than leaving a reader to assume otherwise.
+    """
+    step_types = {"MCT": "Mapping Task", "MI_TASK": "Mass Ingestion Task"}
+    steps: List[Step] = []
+
+    for task in sorted(integration.tasks, key=lambda t: t.name):
+        steps.append(Step(
+            seq="", title=task.name,
+            step_type=step_types.get(task.task_type, task.task_type or "Task"),
+            task_name=task.name, task=task,
+        ))
+
+    # A mapping exported on its own has no task to run it. Wrap it so the
+    # renderers see the shape they see everywhere else; the wrapper is
+    # scaffolding, not an asset, so it is deliberately not added to
+    # integration.tasks - the Parse Report should still say zero tasks.
+    already = {id(t.mapping) for t in integration.tasks if t.mapping}
+    for mapping in sorted(integration.mappings, key=lambda m: m.name):
+        if id(mapping) in already:
+            continue
+        steps.append(Step(
+            seq="", title=mapping.name, step_type="Mapping",
+            task=Task(name=mapping.name, task_type="MAPPING", guid=mapping.guid,
+                      description=mapping.description, mapping=mapping),
+        ))
+
+    if not steps:
+        return
+
+    for number, step in enumerate(steps, start=1):
+        step.seq = str(number)
+    integration.steps = steps
+
+    warnings.append(
+        f"This package contains no taskflow, so there is no execution order to "
+        f"report. The {len(steps)} asset(s) it does contain are documented "
+        f"below in name order - do not read that as the order they run in."
+    )
+
+
+def _package_name(package: ExportPackage, integration: Integration) -> str:
+    """What to call a package that has no taskflow to take a name from.
+
+    IICS stamps the export with the name of whatever was selected, suffixed
+    with a timestamp, so that is the most faithful answer available.
+    """
+    exported = str(package.metadata.get("name", "") or "")
+    exported = re.sub(r"-\d{10,}$", "", exported)
+    if exported:
+        return exported
+    if len(integration.tasks) == 1:
+        return integration.tasks[0].name
+    if len(integration.mappings) == 1:
+        return integration.mappings[0].name
+    return package.project_name or ""
+
+
+#: Prefixes teams put on a mapping task that runs mapping ``m_<name>``. IICS
+#: does not impose one, so several are in use across a single estate; longest
+#: first so ``mct_`` is never read as a shorter prefix.
+_TASK_PREFIXES = ("mctt_", "mct_", "mtt_", "mt_", "t_")
+
+
 def _mapping_name_for(task_name: str) -> str:
-    """``mct_FOO`` conventionally runs mapping ``m_FOO`` - a naming fallback."""
-    return "m_" + task_name[4:] if task_name.startswith("mct_") else task_name
+    """``mct_FOO`` / ``mt_FOO`` conventionally run mapping ``m_FOO``."""
+    for prefix in _TASK_PREFIXES:
+        if task_name.startswith(prefix):
+            return "m_" + task_name[len(prefix):]
+    return task_name
+
+
+def _link_by_elimination(integration: Integration, warnings: List[str]) -> None:
+    """Link the only task to the only mapping when nothing else matched.
+
+    A package built around one mapping task is the common single-integration
+    export. If its ``mappingId`` points at a GUID the export did not carry and
+    the naming convention does not match either, there is still exactly one
+    mapping it can be running.
+    """
+    unlinked = [t for t in integration.tasks
+                if t.task_type == "MCT" and t.mapping is None]
+    if len(unlinked) != 1 or len(integration.mappings) != 1:
+        return
+    mapping = integration.mappings[0]
+    if any(t.mapping is mapping for t in integration.tasks):
+        return
+
+    unlinked[0].mapping = mapping
+    warnings.append(
+        f"{unlinked[0].name} does not name its mapping in a way this package "
+        f"can resolve, so it has been matched to '{mapping.name}' - the only "
+        f"mapping present. Confirm that is the mapping it runs."
+    )
 
 
 def _derive_defaults(integration: Integration) -> None:
@@ -106,6 +221,16 @@ def _derive_defaults(integration: Integration) -> None:
     # Only the taskflow's own description describes the integration. A step's
     # description describes that step, so it is left for AI or a human rather
     # than passed off as the integration's business purpose.
+    #
+    # The exception is a package that is a single asset: there the asset's
+    # description is not one step's description among many, it is the whole of
+    # what this package does.
+    if not meta.description and len(integration.steps) == 1:
+        only = integration.steps[0]
+        described = only.task.description if only.task else ""
+        meta.description = described or (
+            only.task.mapping.description if only.task and only.task.mapping else ""
+        )
 
     if not meta.display_name:
         meta.display_name = meta.taskflow_name

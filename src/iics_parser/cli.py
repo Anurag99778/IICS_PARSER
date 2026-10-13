@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--init-overrides", type=Path, metavar="FILE",
                    help="Write a starter overrides file for the input and exit.")
     p.add_argument("--ai", action="store_true",
-                   help="Draft narrative fields with Claude (needs ANTHROPIC_API_KEY).")
+                   help="Draft narrative fields with GPT (needs OPENAI_API_KEY).")
     p.add_argument("--template", type=Path,
                    help="Word template to inherit styles from.")
     p.add_argument("--format", choices=["all", "excel", "word"], default="all",
@@ -55,7 +55,7 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     if args.ai and not ai_enrich.is_available():
-        print("warning: --ai requested but no Anthropic credentials or SDK found; "
+        print("warning: --ai requested but no OPENAI_API_KEY or openai SDK found; "
               "narrative fields will be left for a human.", file=sys.stderr)
 
     overrides = load_overrides(args.overrides)

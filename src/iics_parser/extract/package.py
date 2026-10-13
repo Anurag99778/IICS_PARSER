@@ -124,11 +124,9 @@ class ExportPackage:
                 )
             )
 
-        if not self.by_type("TASKFLOW"):
-            self.warnings.append(
-                "No taskflow (tf_*.TASKFLOW.xml) found in package - "
-                "outputs will be limited to asset-level detail."
-            )
+        # A package with no taskflow is normal - IICS exports single assets as
+        # readily as whole orchestrations. build.py documents what is there and
+        # says what it could not establish, so nothing is warned about here.
 
     # ---------------------------------------------------------------- access
 

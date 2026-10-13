@@ -45,15 +45,17 @@ class CoverageLine:
 def audit(integration: Integration,
           detail_rows: Sequence[Sequence[str]],
           field_rows: Sequence[Sequence[str]],
-          object_rows: Sequence[Sequence[str]] = ()) -> List[CoverageLine]:
+          object_rows: Sequence[Sequence[str]] = (),
+          connection_rows: Sequence[Sequence[str]] = ()) -> List[CoverageLine]:
     """Compare what the package holds against what the sheets show."""
     detail_text = _text_of(detail_rows)
     field_text = _text_of(field_rows)
     object_text = _text_of(object_rows)
-    both = detail_text | field_text | object_text
+    both = detail_text | field_text | object_text | _text_of(connection_rows)
     # Multi-word values (option labels) are never whole tokens, so they need a
     # substring check against the raw rendered text rather than the token set.
-    blob = "\n".join((_blob(detail_rows), _blob(field_rows), _blob(object_rows)))
+    blob = "\n".join((_blob(detail_rows), _blob(field_rows), _blob(object_rows),
+                      _blob(connection_rows)))
 
     lines: List[CoverageLine] = []
 
@@ -85,7 +87,7 @@ def audit(integration: Integration,
         for tx in mapping.sources + mapping.targets:
             label = tx.object_name or tx.name
             endpoints.append(label)
-            if label and label not in both and (tx.custom_query or "") not in both:
+            if label and label not in blob and (tx.custom_query or "") not in blob:
                 missing_endpoints.append(f"{mapping.name} · {tx.kind} {label}")
     lines.append(CoverageLine("Source/target objects", len(endpoints),
                               len(endpoints) - len(missing_endpoints), missing_endpoints))
@@ -113,7 +115,10 @@ def audit(integration: Integration,
                               len(pairs) - len(missing_pairs), missing_pairs))
 
     # 7. Connections. One never mentioned is exported but unused by this flow.
-    unused_conns = [c.name for c in integration.connections if c.name not in both]
+    #    Checked against the rendered text rather than the token set: a name
+    #    like "Cloud Integration Hub" is several tokens and never matches as
+    #    one, so the token set reported it missing while it was plainly there.
+    unused_conns = [c.name for c in integration.connections if c.name not in blob]
     lines.append(CoverageLine(
         "Connections referenced", len(integration.connections),
         len(integration.connections) - len(unused_conns), unused_conns,

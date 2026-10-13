@@ -3,17 +3,62 @@
 Turns an Informatica IICS export package (`.zip`) into the analysis documents
 used for the Oracle Integration Cloud migration:
 
-* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field level mapping* and
-  *Source & Target Fields* sheets, plus a *Parse Report* with a coverage table
+* **`<taskflow>_Analysis.xlsx`** — *Mapping Details*, *Field Values*,
+  *Source & Target Fields* and *Connection Details* sheets, plus a *Parse
+  Report* with a coverage table
 * **`<taskflow>_Analysis.docx`** — the process document, built on your own
-  template, with the mapping diagrams embedded automatically
+  branded template: its cover page, header artwork and contents block are kept
+  and its front tables filled in, with the mapping diagrams embedded
 
-What used to be a day of digging through the IICS UI is a single command.
+What used to be a day of digging through the IICS UI is a single command — or a
+single upload, if you deploy the web front end.
 
 ```bash
 pip install -e .
 iics-parser export.zip -o output/
 ```
+
+## Deploy the web app
+
+One command on any Linux box with Docker. Nothing else to install.
+
+```bash
+git clone <this repo> && cd IICS_PARSER
+docker compose up -d --build
+```
+
+Then open **`http://<server-ip>/parserIICS`**, drop in a `.zip` export package
+and download the Excel and Word documents. Several packages can be uploaded at
+once, and the page reports the coverage figure for each so you can see at a
+glance whether an analysis is whole.
+
+Settings all have working defaults; copy `.env.example` to `.env` to change any
+of them:
+
+| | |
+|---|---|
+| `HTTP_PORT` | host port nginx binds (default `80`) |
+| `URL_PREFIX` | the path the app is served under (default `/parserIICS`) |
+| `MAX_UPLOAD_MB` | largest upload accepted (default `200`) |
+| `JOB_TTL_HOURS` | how long generated documents stay downloadable (default `6`) |
+| `OPENAI_API_KEY` | enables the "draft with AI" checkbox; optional |
+| `OPENAI_MODEL` | which GPT model to use (default `gpt-4o`) |
+
+Uploads and generated documents are deleted once they pass `JOB_TTL_HOURS` — an
+export package contains connection detail that should not sit on a disk
+indefinitely.
+
+```bash
+docker compose logs -f          # watch it run
+docker compose down             # stop
+docker compose up -d --build    # after a git pull
+```
+
+**Already running something on port 80?** Set `HTTP_PORT=8080` in `.env`, or
+drop the `web` service and point your existing nginx at the app container —
+`deploy/nginx.conf` is the location block to copy. The app handles the
+`/parserIICS` prefix itself, so it works whether your proxy forwards the full
+path or strips the prefix first.
 
 > **If `iics-parser` is "not recognized" (common on Windows):** pip installs the
 > command into a `Scripts` directory that is often not on PATH. Use the module
@@ -37,7 +82,7 @@ iics-parser exports/ -o output/
 # Only the spreadsheet
 iics-parser export.zip --format excel
 
-# Let Claude draft the narrative fields (needs ANTHROPIC_API_KEY)
+# Let GPT draft the narrative fields (needs OPENAI_API_KEY)
 iics-parser export.zip --ai
 
 # Scaffold the fields a human has to supply
@@ -74,17 +119,24 @@ Almost everything. The export package is far more structured than it looks:
 | Every file-operation property (rename suffix, PGP key, …) | `taskActions[].properties`, read generically |
 | **Mapping diagrams in the Word doc** | the preview JPEG inside each `.DTEMPLATE` |
 | Notification recipients, subjects, bodies | `emailNotificationService` parameters |
+| Schema per leg, on the Connection Details sheet | `object.dbSchema`, else the connection's schema/user |
 | Error handling | taskflow `<catch>` handlers |
 
 ### What it cannot know
 
 Business owner, technical owner, criticality, trigger type, environments and
-the business-purpose narrative are organisational facts, not metadata. They come
-from `overrides.yaml`, or are drafted by Claude with `--ai`. Precedence is:
+the integration-purpose narrative are organisational facts, not metadata. They
+come from `overrides.yaml`, or are drafted by GPT with `--ai` (or the checkbox
+in the web app). Precedence is:
 
 ```
 overrides.yaml  >  AI draft  >  parsed value
 ```
+
+The **Integration Purpose/Objective** section is the clearest case: it takes
+the taskflow's own description, an override, or the GPT draft — and shows
+`[to be confirmed]` when none of those supplied one, rather than letting the
+standing migration boilerplate underneath it pass for a purpose.
 
 Anything unfilled appears as a red `[to be confirmed]` in the Word document
 rather than being quietly invented, and every AI-drafted field is listed in the
@@ -119,9 +171,11 @@ parse/       taskflow · mapping graph · tasks · connections  →  build.py
    ↓
 model/ir.py  one normalised Integration object   ← the single source of truth
    ↓
-enrich/      overrides.yaml, optional Claude drafting
+enrich/      overrides.yaml, optional GPT drafting
    ↓
 render/      rows.py → excel.py · word.py
+   ↓
+web/         Flask upload form over the same pipeline
 ```
 
 Everything renders from the same intermediate representation, so the Excel and
@@ -149,6 +203,16 @@ missing is visible even when no individual step reported a problem. Anything
 short of complete names the specific objects. Read this first on a new
 integration; it is the fastest way to know whether the analysis is whole.
 
+### Packages with no taskflow
+
+Not every integration is an orchestration. IICS exports a single asset as
+readily as a whole taskflow, so a package is often just a mapping, or a mapping
+task and the mapping it runs. Those are documented the same way — sources,
+targets, expressions, column lineage, field grids and the mapping diagram all
+come out — with one difference the Parse Report states plainly: with no
+taskflow there is no execution order, so the assets are listed in **name
+order**, which must not be read as the order they run in.
+
 ### Handling integrations this parser has not seen
 
 Transformation types are resolved through each mapping file's own
@@ -164,11 +228,12 @@ and pre-SQL. If work to support another integration breaks a test there, that
 is the signal to look again.
 
 ```bash
-python -m pytest        # 78 tests
+python -m pytest        # 127 tests (58 of them need a package in samples/)
 ```
 
 ## Requirements
 
 Python 3.9+, `openpyxl`, `python-docx`, `PyYAML`. The `--ai` flag additionally
-needs `pip install 'iics-parser[ai]'` and an `ANTHROPIC_API_KEY`; without them
-the tool runs exactly the same and leaves the narrative fields to a human.
+needs `pip install 'iics-parser[ai]'` and an `OPENAI_API_KEY`; without them the
+tool runs exactly the same and leaves the narrative fields to a human. The web
+app needs `pip install 'iics-parser[web]'`, or just use the container.

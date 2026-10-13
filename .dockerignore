@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+**/__pycache__
+**/*.pyc
+.pytest_cache
+tests
+tools
+samples
+output
+*.xlsx
+*.docx
+!src/iics_parser/templates/*.docx
