@@ -83,23 +83,40 @@ def build_integration(package: ExportPackage,
 
     # 4. Taskflow - gives execution order and step-level parameters.
     taskflows = package.by_type("TASKFLOW")
-    if len(taskflows) > 1:
-        warnings.append(
-            "Package contains %d taskflows (%s); only '%s' was analysed - "
-            "export the others separately"
-            % (len(taskflows), ", ".join(t.name for t in taskflows), taskflows[0].name)
-        )
     if taskflows:
-        meta, steps = parse_taskflow(taskflows[0].path, warnings)
+        root = _root_taskflow(package, taskflows)
+        others = [t for t in taskflows if t is not root]
+
+        meta, steps = parse_taskflow(root.path, warnings)
         integration.meta = meta
         integration.steps = steps
-        for step in steps:
-            if step.task_name:
-                step.task = tasks_by_name.get(step.task_name)
-                if step.task is None:
-                    warnings.append(
-                        f"Step '{step.title}': task {step.task_name} not in package"
-                    )
+        _resolve_step_tasks(steps, tasks_by_name, warnings)
+
+        # Every other taskflow in the package is documented too, continuing the
+        # sequence under its own label. Analysing only the first left the
+        # mappings the others call unreached, and every expression, column
+        # mapping and sort key inside them went unreported - the package looked
+        # half-parsed when it had simply been half-read.
+        for offset, asset in enumerate(sorted(others, key=lambda a: a.name), start=1):
+            sub_meta, sub_steps = parse_taskflow(asset.path, warnings)
+            if not sub_steps:
+                continue
+            for step in sub_steps:
+                step.seq = f"S{offset}.{step.seq}"
+                step.branch = step.branch or asset.name
+                step.depth += 1
+            _resolve_step_tasks(sub_steps, tasks_by_name, warnings)
+            integration.steps.extend(sub_steps)
+
+        if others:
+            warnings.append(
+                "Package holds %d taskflows and all are documented: '%s' "
+                "first, the rest after it as S1-S%d (%s). They are separate "
+                "orchestrations unless one calls another, so read each "
+                "sequence on its own."
+                % (len(taskflows), root.name, len(others),
+                   ", ".join(sorted(a.name for a in others)))
+            )
 
     integration.meta.project = package.project_name
     integration.meta.folder = package.project_name
@@ -391,3 +408,43 @@ def _process_project(asset, package: ExportPackage) -> str:
     if path.startswith("Explore/"):
         path = path[len("Explore/"):]
     return path.split("/")[0] if path else package.project_name
+
+
+def _resolve_step_tasks(steps: List[Step], tasks_by_name: Dict[str, Task],
+                        warnings: List[str]) -> None:
+    """Point each step at the task asset it runs."""
+    for step in steps:
+        if not step.task_name:
+            continue
+        step.task = tasks_by_name.get(step.task_name)
+        if step.task is None:
+            warnings.append(
+                f"Step '{step.title}': task {step.task_name} not in package"
+            )
+
+
+def _root_taskflow(package: ExportPackage, taskflows: List):
+    """The taskflow the package was exported for.
+
+    The export is stamped with the selected asset's name, so that settles it.
+    Failing that, the root is the one no other taskflow runs as a subtaskflow -
+    a child is always named by its parent.
+    """
+    exported = re.sub(r"-\d{10,}$", "", str(package.metadata.get("name", "") or ""))
+    for asset in taskflows:
+        if asset.name == exported:
+            return asset
+
+    names = {a.name for a in taskflows}
+    called = set()
+    for asset in taskflows:
+        try:
+            text = asset.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for other in names - {asset.name}:
+            if other in text:
+                called.add(other)
+
+    roots = [a for a in taskflows if a.name not in called]
+    return roots[0] if roots else taskflows[0]

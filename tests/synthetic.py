@@ -339,3 +339,95 @@ def write_process_package(path: Path, *, project: str = "Orders",
             pkg.writestr(f"Explore/{project}/app-JDBC-STAGING.AI_CONNECTION.xml",
                          ai_connection_xml())
     return path
+
+
+# ----------------------------------------------------- multi-taskflow packages
+
+_TASKFLOW_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<aetgt:getResponse xmlns:aetgt="http://schemas.active-endpoints.com/appmodules/repository/2010/10/avrepository.xsd"
+                   xmlns:types1="http://schemas.active-endpoints.com/appmodules/repository/2010/10/avrepository.xsd">
+  <types1:Item>
+    <types1:Name>{name}</types1:Name>
+    <types1:VersionLabel>1.0</types1:VersionLabel>
+    <types1:ModifiedBy>designer@example.com</types1:ModifiedBy>
+    <types1:ModificationDate>2025-02-20T15:41:45Z</types1:ModificationDate>
+    <types1:Entry>
+      <taskflow xmlns="http://schemas.active-endpoints.com/appmodules/screenflow/2010/10/avosScreenflow.xsd"
+                name="{name}" displayName="{name}">
+        <flow id="f-{name}">
+          <start id="n0-{name}"><link id="l0-{name}" targetId="n1-{name}"/></start>
+          <service id="n1-{name}">
+            <title>run_{task}</title>
+            <serviceName>ICSExecuteDataTask</serviceName>
+            <serviceInput>
+              <parameter name="Task Name">{task}</parameter>
+            </serviceInput>
+            <link id="l1-{name}" targetId="n2-{name}"/>
+          </service>
+          <end id="n2-{name}"/>
+        </flow>
+      </taskflow>
+    </types1:Entry>
+  </types1:Item>
+</aetgt:getResponse>
+"""
+
+
+def taskflow_xml(name: str, task: str) -> str:
+    """A taskflow whose single step runs ``task``."""
+    return _TASKFLOW_XML.format(name=name, task=task)
+
+
+def write_multi_taskflow_package(path: Path, *, project: str = "Finance",
+                                 flows: Optional[List[str]] = None,
+                                 exported: Optional[str] = None) -> Path:
+    """An export holding several taskflows, each running its own mapping.
+
+    This is what IICS produces when a folder is exported rather than a single
+    asset, and it is the shape that used to lose everything but the first
+    taskflow - along with every mapping the others called.
+    """
+    flows = flows or ["tf_ALPHA", "tf_BETA", "tf_GAMMA"]
+    path = Path(path)
+    objects: List[Dict] = [_exported("cn_WAREHOUSE", "Connection", "CONN0001", "/SYS")]
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as pkg:
+        pkg.writestr("SYS/cn_WAREHOUSE.Connection.zip",
+                     _asset_zip({"connection.json": json.dumps([connection()])}))
+
+        for index, flow in enumerate(flows, start=1):
+            mapping_name = f"m_{flow[3:]}"
+            task_name = f"mct_{flow[3:]}"
+            guid = f"MAP{index:05d}"
+
+            objects += [
+                _exported(flow, "TASKFLOW", f"TF{index:05d}", f"/Explore/{project}"),
+                _exported(mapping_name, "DTEMPLATE", guid, f"/Explore/{project}"),
+                _exported(task_name, "MTT", f"TASK{index:04d}", f"/Explore/{project}"),
+            ]
+            pkg.writestr(f"Explore/{project}/{flow}.TASKFLOW.xml",
+                         taskflow_xml(flow, task_name))
+            pkg.writestr(f"Explore/{project}/{mapping_name}.DTEMPLATE.zip",
+                         _asset_zip({
+                             "fileRecord.json": json.dumps([
+                                 {"id": "@3", "type": "IMFOBJECT"},
+                                 {"id": "@2", "type": "IMAGE"},
+                             ]),
+                             "bin/@3.bin": json.dumps(mapping_graph(
+                                 source_object=f"STG_{flow[3:]}",
+                                 target_object=f"DW_{flow[3:]}",
+                                 with_sorter=True)),
+                             "bin/@2.bin": PREVIEW_JPEG,
+                         }))
+            pkg.writestr(f"Explore/{project}/{task_name}.MTT.zip",
+                         _asset_zip({"mtTask.json": json.dumps([{
+                             "name": task_name, "frsGuid": f"TASK{index:04d}",
+                             "mappingId": f"@{guid}",
+                         }])}))
+
+        pkg.writestr("exportMetadata.v2.json", json.dumps({
+            "name": f"{exported or flows[0]}-1787142080634",
+            "sourceOrgId": "ORG1", "sourceOrgName": "ACME_DEV",
+            "exportedObjects": objects,
+        }))
+    return path

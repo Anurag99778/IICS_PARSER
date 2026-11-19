@@ -257,7 +257,11 @@ def test_wide_mapping_does_not_produce_unbounded_paths():
 
 
 def test_extra_taskflows_are_reported(tmp_path):
-    """Only one taskflow is analysed - a second must not vanish silently."""
+    """Every taskflow is documented, and the report says which were found.
+
+    Unreadable taskflow XML contributes no steps, but the package still has to
+    say what it held - a second taskflow must never vanish silently.
+    """
     from iics_parser.extract.package import Asset, ExportPackage
 
     class TwoFlows(ExportPackage):
